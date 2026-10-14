@@ -1,0 +1,67 @@
+# Makefile for Anbernic RG DS Plus Dual-Screen Metronome (1024x768x2 aarch64 & x86_64 Host)
+
+# --- Anbernic RG DS Plus (Rockchip RK3568 Cortex-A55 aarch64) Configuration ---
+AARCH64_ROOT ?= $(HOME)/.cache/aarch64_toolchain
+AARCH64_PATH = $(AARCH64_ROOT)/usr/bin:$(PATH)
+AARCH64_LD_LIB = $(AARCH64_ROOT)/usr/lib/x86_64-linux-gnu:$(AARCH64_ROOT)/usr/lib
+
+CC = PATH="$(AARCH64_PATH)" LD_LIBRARY_PATH="$(AARCH64_LD_LIB)" aarch64-linux-gnu-gcc-14
+STRIP = PATH="$(AARCH64_PATH)" LD_LIBRARY_PATH="$(AARCH64_LD_LIB)" aarch64-linux-gnu-strip
+
+SYSROOT_FLAGS = --sysroot="$(AARCH64_ROOT)" \
+	-isystem "$(AARCH64_ROOT)/usr/aarch64-linux-gnu/include" \
+	-B"$(AARCH64_ROOT)/usr/aarch64-linux-gnu/lib" \
+	-B"$(AARCH64_ROOT)/usr/lib/gcc-cross/aarch64-linux-gnu/14" \
+	-L"$(AARCH64_ROOT)/usr/aarch64-linux-gnu/lib"
+
+CFLAGS = -O2 -Wall -Wextra -std=gnu99 -mcpu=cortex-a55 -D_GNU_SOURCE=1 $(SYSROOT_FLAGS)
+LDFLAGS = -lm -lpthread -ldl
+
+# --- Host Linux (x86_64 X11 Dual-Screen Window + PulseAudio dlopen) Configuration ---
+HOST_CC ?= gcc
+HOST_CFLAGS = -O2 -Wall -Wextra -std=gnu99 -DHOST_X11 -D_GNU_SOURCE=1
+HOST_LDFLAGS = -lX11 -lm -lpthread -ldl
+
+# --- Targets ---
+TARGET = metronome
+HOST_TARGET = metronome_linux
+SRCS = metronome.c
+
+.PHONY: all rgds linux host run-linux package clean
+
+# Default builds the Anbernic RG DS Plus (aarch64) binary and SD card package
+all: $(TARGET) package
+
+rgds: $(TARGET)
+
+# Build x86_64 Linux binary for local dual-screen testing/debugging
+linux: $(HOST_TARGET)
+
+host: $(HOST_TARGET)
+
+$(TARGET): $(SRCS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRCS) $(LDFLAGS)
+	$(STRIP) $(TARGET)
+
+$(HOST_TARGET): $(SRCS)
+	$(HOST_CC) $(HOST_CFLAGS) -o $(HOST_TARGET) $(SRCS) $(HOST_LDFLAGS)
+
+run-linux: $(HOST_TARGET)
+	./$(HOST_TARGET)
+
+package: $(TARGET)
+	rm -rf sdcard_package
+	mkdir -p sdcard_package/Roms/APPS/metronome
+	mkdir -p sdcard_package/Roms/APPS/Imgs
+	mkdir -p sdcard_package/Ports/Metronome
+	cp $(TARGET) metronome.png sdcard_package/Roms/APPS/metronome/
+	cp metronome.png sdcard_package/Roms/APPS/Imgs/Metronome.png
+	cp Metronome.sh sdcard_package/Roms/APPS/Metronome.sh
+	cp $(TARGET) metronome.png sdcard_package/Ports/Metronome/
+	cp Metronome.sh sdcard_package/Ports/Metronome/launch.sh
+	chmod +x sdcard_package/Roms/APPS/Metronome.sh sdcard_package/Roms/APPS/metronome/$(TARGET)
+	chmod +x sdcard_package/Ports/Metronome/launch.sh sdcard_package/Ports/Metronome/$(TARGET)
+
+clean:
+	rm -f $(TARGET) $(HOST_TARGET)
+	rm -rf sdcard_package
