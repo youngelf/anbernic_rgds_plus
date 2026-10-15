@@ -52,6 +52,156 @@ static bool g_quit_requested = false;
 static char g_backend_desc[128] = "Uninitialized";
 
 /*
+ * Internal 10-point multi-touch state table (shared by hardware Goodix GT911
+ * "goodix-ts" evdev, SDL2 TouchFingerEvent fallback, and X11 simulator).
+ */
+typedef struct {
+    bool          down;
+    bool          prev_down;
+    bool          pressed_latch;
+    bool          released_latch;
+    int           raw_x;
+    int           raw_y;
+    int           prev_x;
+    int           prev_y;
+    int           prev_native_x;
+    int           prev_native_y;
+    int           pressure;
+    rgds_screen_t screen;
+} rgds_internal_touch_slot_t;
+
+static rgds_internal_touch_slot_t g_touch_slots[RGDS_MAX_TOUCH_POINTS];
+static rgds_touch_state_t         g_touch_state;
+static bool                       g_touch_enabled = true;
+static int                        g_lcd_swap = 0;
+
+bool rgds_is_touch_enabled(void) {
+    return g_touch_enabled;
+}
+
+static inline int clamp_int(int val, int lo, int hi) {
+    if (val < lo) return lo;
+    if (val > hi) return hi;
+    return val;
+}
+
+static void rgds_reset_touch_slots(void) {
+    rgds_screen_t def_scr = g_lcd_swap ? RGDS_SCREEN_TOP : RGDS_SCREEN_BOTTOM;
+    memset(g_touch_slots, 0, sizeof(g_touch_slots));
+    memset(&g_touch_state, 0, sizeof(g_touch_state));
+    g_touch_state.screen = def_scr;
+    for (int s = 0; s < RGDS_MAX_TOUCH_POINTS; s++) {
+        g_touch_slots[s].screen = def_scr;
+        g_touch_state.points[s].id = s;
+        g_touch_state.points[s].screen = def_scr;
+    }
+}
+
+static void rgds_finalize_touch_frame(rgds_touch_state_t *out_touch) {
+    int  active_count      = 0;
+    int  primary_active    = -1;
+    int  primary_edge      = -1;
+    bool any_just_pressed  = false;
+    bool any_just_released = false;
+    bool prev_touching     = g_touch_state.touching;
+
+    for (int s = 0; s < RGDS_MAX_TOUCH_POINTS; s++) {
+        rgds_internal_touch_slot_t *slot = &g_touch_slots[s];
+        rgds_touch_point_t         *pt   = &g_touch_state.points[s];
+
+        bool act = g_touch_enabled && slot->down;
+        bool jp  = g_touch_enabled && (slot->pressed_latch || (act && !slot->prev_down));
+        bool jr  = slot->released_latch || (!act && slot->prev_down);
+
+        int nx = clamp_int(slot->raw_x, 0, RGDS_NATIVE_W - 1);
+        int ny = clamp_int(slot->raw_y, 0, RGDS_NATIVE_H - 1);
+        int cx = (nx * RGDS_CANVAS_W) / RGDS_NATIVE_W;
+        int cy = (ny * RGDS_CANVAS_H) / RGDS_NATIVE_H;
+
+        int dx = 0, dy = 0, ndx = 0, ndy = 0;
+        if (act && !jp && slot->prev_down) {
+            dx  = cx - slot->prev_x;
+            dy  = cy - slot->prev_y;
+            ndx = nx - slot->prev_native_x;
+            ndy = ny - slot->prev_native_y;
+        }
+
+        pt->active        = act;
+        pt->just_pressed  = jp;
+        pt->just_released = jr;
+        pt->id            = s;
+        if (act || jp || jr) {
+            pt->x        = cx;
+            pt->y        = cy;
+            pt->native_x = nx;
+            pt->native_y = ny;
+            pt->screen   = slot->screen;
+        }
+        pt->dx        = dx;
+        pt->dy        = dy;
+        pt->native_x  = clamp_int(pt->native_x, 0, RGDS_NATIVE_W - 1);
+        pt->native_y  = clamp_int(pt->native_y, 0, RGDS_NATIVE_H - 1);
+        pt->native_dx = ndx;
+        pt->native_dy = ndy;
+        pt->pressure  = act ? (slot->pressure > 0 ? slot->pressure : 128) : 0;
+
+        slot->prev_down      = act;
+        slot->pressed_latch  = false;
+        slot->released_latch = false;
+        if (act || jp) {
+            slot->prev_x        = cx;
+            slot->prev_y        = cy;
+            slot->prev_native_x = nx;
+            slot->prev_native_y = ny;
+        }
+
+        if (act) {
+            active_count++;
+            if (primary_active < 0) primary_active = s;
+        }
+        if (jp) {
+            any_just_pressed = true;
+            if (primary_edge < 0) primary_edge = s;
+        }
+        if (jr) {
+            any_just_released = true;
+            if (primary_edge < 0) primary_edge = s;
+        }
+    }
+
+    g_touch_state.touching      = (active_count > 0);
+    g_touch_state.count         = active_count;
+    g_touch_state.just_pressed  = any_just_pressed || (!prev_touching && active_count > 0);
+    g_touch_state.just_released = (any_just_released && active_count == 0) ||
+                                  (prev_touching && active_count == 0);
+
+    int ref = (primary_active >= 0) ? primary_active : primary_edge;
+    if (ref >= 0) {
+        const rgds_touch_point_t *p = &g_touch_state.points[ref];
+        g_touch_state.x         = p->x;
+        g_touch_state.y         = p->y;
+        g_touch_state.dx        = p->dx;
+        g_touch_state.dy        = p->dy;
+        g_touch_state.native_x  = p->native_x;
+        g_touch_state.native_y  = p->native_y;
+        g_touch_state.native_dx = p->native_dx;
+        g_touch_state.native_dy = p->native_dy;
+        g_touch_state.pressure  = p->pressure;
+        g_touch_state.screen    = p->screen;
+    } else {
+        g_touch_state.dx        = 0;
+        g_touch_state.dy        = 0;
+        g_touch_state.native_dx = 0;
+        g_touch_state.native_dy = 0;
+        g_touch_state.pressure  = 0;
+    }
+
+    if (out_touch) {
+        *out_touch = g_touch_state;
+    }
+}
+
+/*
  * System audio volume step (0..10) & PulseAudio sink percentage lookup table
  * verified from /mnt/vendor/bin/portsCtrl.dge (.rodata 0x5af4).
  */
@@ -319,9 +469,55 @@ static int      g_sim_w = 640;  /* Default 2x integer scale of 320x240 (640x480 
 static int      g_sim_h = 480;
 static int      g_total_h = 480 * 2 + X11_HINGE_H;
 static uint32_t g_x11_held = 0;
+static bool     g_x11_mouse_down = false;
+
+static void x11_update_touch_from_mouse(int mx, int my, bool down, bool is_press_edge, bool is_release_edge) {
+    if (!g_touch_enabled || g_sim_w <= 0 || g_sim_h <= 0) return;
+
+    rgds_screen_t scr = g_touch_slots[0].screen;
+    int local_y = 0;
+
+    if (my < g_sim_h) {
+        scr = RGDS_SCREEN_TOP;
+        local_y = clamp_int(my, 0, g_sim_h - 1);
+    } else if (my >= g_sim_h + X11_HINGE_H) {
+        scr = RGDS_SCREEN_BOTTOM;
+        local_y = clamp_int(my - (g_sim_h + X11_HINGE_H), 0, g_sim_h - 1);
+    } else {
+        /* Inside the 8px hinge gap: clamp to whichever screen the drag started on */
+        if (scr == RGDS_SCREEN_TOP) {
+            local_y = g_sim_h - 1;
+        } else {
+            local_y = 0;
+        }
+    }
+
+    int local_x = clamp_int(mx, 0, g_sim_w - 1);
+    int nx = clamp_int((local_x * RGDS_NATIVE_W) / g_sim_w, 0, RGDS_NATIVE_W - 1);
+    int ny = clamp_int((local_y * RGDS_NATIVE_H) / g_sim_h, 0, RGDS_NATIVE_H - 1);
+
+    g_touch_slots[0].raw_x    = nx;
+    g_touch_slots[0].raw_y    = ny;
+    g_touch_slots[0].screen   = scr;
+    g_touch_slots[0].down     = down;
+    g_touch_slots[0].pressure = down ? 200 : 0;
+    if (is_press_edge)   g_touch_slots[0].pressed_latch  = true;
+    if (is_release_edge) g_touch_slots[0].released_latch = true;
+}
+
+void rgds_set_touch_enabled(bool enabled) {
+    g_touch_enabled = enabled;
+    if (!enabled) {
+        g_x11_mouse_down = false;
+        rgds_reset_touch_slots();
+    }
+}
 
 int rgds_init(const char *app_title) {
     init_scale_lut();
+    g_touch_enabled = true;
+    rgds_reset_touch_slots();
+
     if (getenv("RGDS_FULL_1024")) {
         g_sim_w = RGDS_NATIVE_W;
         g_sim_h = RGDS_NATIVE_H;
@@ -368,7 +564,9 @@ int rgds_init(const char *app_title) {
 
     XSelectInput(g_x11_dpy, g_x11_win,
                  ExposureMask | KeyPressMask | KeyReleaseMask |
-                 ButtonPressMask | ButtonReleaseMask | FocusChangeMask | StructureNotifyMask);
+                 ButtonPressMask | ButtonReleaseMask |
+                 PointerMotionMask | Button1MotionMask |
+                 FocusChangeMask | StructureNotifyMask);
     g_wm_delete = XInternAtom(g_x11_dpy, "WM_DELETE_WINDOW", False);
     XSetWMProtocols(g_x11_dpy, g_x11_win, &g_wm_delete, 1);
 
@@ -516,26 +714,19 @@ bool rgds_poll_input(rgds_input_state_t *out_input) {
             } else if (ev.xbutton.button == Button5) {
                 if (ev.xbutton.y < g_sim_h) pressed_latch |= RGDS_BTN_DOWN;
                 else                        pressed_latch |= RGDS_BTN_R2;
-            } else if (ev.xbutton.button == Button1 && g_sim_w > 0 && g_sim_h > 0) {
-                /* Map clicks on the footer controls of Top or Bottom screen */
-                int lx = (ev.xbutton.x * RGDS_CANVAS_W) / g_sim_w;
-                if (ev.xbutton.y >= 0 && ev.xbutton.y < g_sim_h) {
-                    int ly = (ev.xbutton.y * RGDS_CANVAS_H) / g_sim_h;
-                    if (ly >= 214 && ly <= 240) {
-                        if (lx >= 4 && lx <= 106)        pressed_latch |= RGDS_BTN_A;
-                        else if (lx >= 108 && lx <= 174) pressed_latch |= RGDS_BTN_X;
-                        else if (lx >= 176 && lx <= 228) pressed_latch |= RGDS_BTN_Y;
-                        else if (lx >= 230 && lx <= 316) pressed_latch |= RGDS_BTN_SELECT;
-                    }
-                } else if (ev.xbutton.y >= g_sim_h + X11_HINGE_H && ev.xbutton.y < g_total_h) {
-                    int by = ev.xbutton.y - (g_sim_h + X11_HINGE_H);
-                    int ly = (by * RGDS_CANVAS_H) / g_sim_h;
-                    if (ly >= 216 && ly <= 240) {
-                        if (lx >= 4 && lx <= 110)        pressed_latch |= RGDS_BTN_R2;
-                        else if (lx >= 112 && lx <= 225) pressed_latch |= RGDS_BTN_START;
-                        else if (lx >= 226 && lx <= 316) pressed_latch |= RGDS_BTN_SELECT;
-                    }
-                }
+            } else if (ev.xbutton.button == Button1) {
+                g_x11_mouse_down = true;
+                x11_update_touch_from_mouse(ev.xbutton.x, ev.xbutton.y, true, true, false);
+            }
+        } else if (ev.type == ButtonRelease) {
+            if (ev.xbutton.button == Button1) {
+                g_x11_mouse_down = false;
+                x11_update_touch_from_mouse(ev.xbutton.x, ev.xbutton.y, false, false, true);
+            }
+        } else if (ev.type == MotionNotify) {
+            if (g_x11_mouse_down || (ev.xmotion.state & Button1Mask)) {
+                g_x11_mouse_down = true;
+                x11_update_touch_from_mouse(ev.xmotion.x, ev.xmotion.y, true, false, false);
             }
         } else if (ev.type == KeyPress) {
             bool is_esc = false;
@@ -590,6 +781,8 @@ bool rgds_poll_input(rgds_input_state_t *out_input) {
     if (((g_x11_held | pressed_latch) & (RGDS_BTN_START | RGDS_BTN_SELECT)) == (RGDS_BTN_START | RGDS_BTN_SELECT)) {
         g_quit_requested = true;
     }
+
+    rgds_finalize_touch_frame(out_input ? &out_input->touch : NULL);
 
     if (out_input) {
         out_input->held     = g_x11_held;
@@ -668,7 +861,39 @@ void rgds_shutdown(void) {
  * at runtime against the RG DS Plus system /usr/lib/libSDL2-2.0.so.0.
  */
 typedef struct { int x, y, w, h; } rgds_sdl_rect_t;
-typedef union  { uint32_t type; uint8_t padding[56]; } rgds_sdl_event_t;
+
+/*
+ * 64-bit SDL_TouchFingerEvent layout verified from /mnt/vendor/bin/dmenu.bin
+ * (touch_handl_poll @ 0x48b58..0x49d50):
+ *   +0:  uint32_t type       (0x700 = SDL_FINGERDOWN, 0x701 = SDL_FINGERUP, 0x702 = SDL_FINGERMOTION)
+ *   +4:  uint32_t timestamp
+ *   +8:  int64_t  touchId
+ *   +16: int64_t  fingerId   (0..9)
+ *   +24: float    x          (0.0f .. 1.0f)
+ *   +28: float    y          (0.0f .. 1.0f)
+ *   +32: float    dx         (-1.0f .. 1.0f)
+ *   +36: float    dy         (-1.0f .. 1.0f)
+ *   +40: float    pressure   (0.0f .. 1.0f)
+ *   +44: uint32_t windowID
+ */
+typedef struct {
+    uint32_t type;
+    uint32_t timestamp;
+    int64_t  touchId;
+    int64_t  fingerId;
+    float    x;
+    float    y;
+    float    dx;
+    float    dy;
+    float    pressure;
+    uint32_t windowID;
+} rgds_sdl_touch_finger_event_t;
+
+typedef union {
+    uint32_t                      type;
+    rgds_sdl_touch_finger_event_t tfinger;
+    uint8_t                       padding[56];
+} rgds_sdl_event_t;
 
 #define SDL_INIT_VIDEO               0x00000020u
 #define SDL_WINDOW_SHOWN             0x00000004u
@@ -680,10 +905,39 @@ typedef union  { uint32_t type; uint8_t padding[56]; } rgds_sdl_event_t;
 #define SDL_PIXELFORMAT_ARGB8888     0x16362004u
 #define SDL_TEXTUREACCESS_STREAMING  1
 #define SDL_QUIT_EVENT               0x100u
+#define SDL_FINGERDOWN_EVENT         0x700u
+#define SDL_FINGERUP_EVENT           0x701u
+#define SDL_FINGERMOTION_EVENT       0x702u
+
+#ifndef ABS_MT_SLOT
+#define ABS_MT_SLOT        0x2f
+#endif
+#ifndef ABS_MT_TOUCH_MAJOR
+#define ABS_MT_TOUCH_MAJOR 0x30
+#endif
+#ifndef ABS_MT_WIDTH_MAJOR
+#define ABS_MT_WIDTH_MAJOR 0x32
+#endif
+#ifndef ABS_MT_POSITION_X
+#define ABS_MT_POSITION_X  0x35
+#endif
+#ifndef ABS_MT_POSITION_Y
+#define ABS_MT_POSITION_Y  0x36
+#endif
+#ifndef ABS_MT_TRACKING_ID
+#define ABS_MT_TRACKING_ID 0x39
+#endif
+#ifndef ABS_MT_PRESSURE
+#define ABS_MT_PRESSURE    0x3a
+#endif
+#ifndef BTN_TOUCH
+#define BTN_TOUCH          0x14a
+#endif
 
 static void *g_sdl_lib = NULL;
 static int  (*pSDL_Init)(uint32_t) = NULL;
 static void (*pSDL_Quit)(void) = NULL;
+static int  (*pSDL_SetHint)(const char *, const char *) = NULL;
 static int  (*pSDL_GetNumVideoDisplays)(void) = NULL;
 static int  (*pSDL_GetDisplayBounds)(int, rgds_sdl_rect_t *) = NULL;
 static void*(*pSDL_CreateWindow)(const char *, int, int, int, int, uint32_t) = NULL;
@@ -706,9 +960,16 @@ static int   g_saved_lcdoff = 0;
 
 /* Direct evdev input descriptors (/dev/input/event*) */
 #define MAX_EVDEV_FDS 16
-static int g_evdev_fds[MAX_EVDEV_FDS];
-static int g_num_evdev_fds = 0;
+static int      g_evdev_fds[MAX_EVDEV_FDS];
+static bool     g_evdev_is_touch[MAX_EVDEV_FDS];
+static bool     g_evdev_uses_mt[MAX_EVDEV_FDS];
+static int      g_evdev_cur_slot[MAX_EVDEV_FDS];
+static int      g_evdev_max_x[MAX_EVDEV_FDS];
+static int      g_evdev_max_y[MAX_EVDEV_FDS];
+static int      g_num_evdev_fds = 0;
+static bool     g_has_evdev_touch = false;
 static uint32_t g_hw_held = 0;
+static uint32_t g_tpctrl_guard_frames = 0;
 
 static int sysfs_read_int(const char *path, int fallback) {
     FILE *f = fopen(path, "r");
@@ -735,6 +996,39 @@ static void sysfs_write_int(const char *path, int val) {
     if (!f) return;
     fprintf(f, "%d\n", val);
     fclose(f);
+}
+
+static void write_text_file(const char *path, const char *content) {
+    FILE *f = fopen(path, "w");
+    if (!f) return;
+    fputs(content, f);
+    fclose(f);
+}
+
+/*
+ * Configure the RG DS Plus kernel touchscreen gate (/sys/class/anbernic_misc/tpctrl)
+ * and Weston DRM touch calibration (/tmp/.weston_drm.conf), matching:
+ *   - /mnt/vendor/bin/dmenu.bin (set_touch_inpt @ 0x15194)
+ *   - /mnt/vendor/deep/drastic64/launch.sh
+ *   - Kernel gt9xx driver (0xc4931c -> allen_get_tpctrl @ 0xc27d84):
+ *       tpctrl == 0 -> touch ENABLED in kernel gt9xx IRQ handler
+ *       tpctrl == 1 -> touch DISABLED in kernel gt9xx IRQ handler
+ */
+static void rgds_apply_hw_touch_config(bool enabled) {
+    if (enabled) {
+        write_text_file("/tmp/.weston_drm.conf", "calibration:gt9xx-0:0.5 0 0.5 0 1 0\n");
+        sysfs_write_int("/sys/class/anbernic_misc/tpctrl", 0);
+    } else {
+        sysfs_write_int("/sys/class/anbernic_misc/tpctrl", 1);
+    }
+}
+
+void rgds_set_touch_enabled(bool enabled) {
+    g_touch_enabled = enabled;
+    rgds_apply_hw_touch_config(enabled);
+    if (!enabled) {
+        rgds_reset_touch_slots();
+    }
 }
 
 void rgds_set_volume(int level_0_to_10) {
@@ -789,7 +1083,16 @@ static void rgds_prepare_hardware_screens(void) {
     sysfs_write_int("/sys/class/anbernic_misc/runapp", 1);
 
     /*
-     * 2. Ensure both 1024x768 LCDs are powered on (lcdoff == 0):
+     * 2. Enable kernel touchscreen reporting (tpctrl = 0) and Weston dual-display
+     *    touchscreen calibration (/tmp/.weston_drm.conf).
+     *    dmenu.bin (set_touch_inpt(0)) and /mnt/vendor/subscreen/launch.sh both write 1
+     *    to /sys/class/anbernic_misc/tpctrl when launching external apps, which causes
+     *    the Goodix GT911 kernel driver (gt9xx) to drop all touch events unless reset to 0.
+     */
+    rgds_apply_hw_touch_config(true);
+
+    /*
+     * 3. Ensure both 1024x768 LCDs are powered on (lcdoff == 0):
      *    If the user previously toggled single-screen mode, lcdoff may be 1 or 2.
      */
     g_saved_lcdoff = sysfs_read_int("/sys/class/anbernic_misc/lcdoff", 0);
@@ -800,15 +1103,15 @@ static void rgds_prepare_hardware_screens(void) {
     }
 
     /*
-     * 3. Synchronize audio volume from /sys/class/anbernic_misc/openbor_volume (0..10).
+     * 4. Synchronize audio volume from /sys/class/anbernic_misc/openbor_volume (0..10).
      */
     int hw_vol = sysfs_read_int("/sys/class/anbernic_misc/openbor_volume", 10);
     if (hw_vol < 0 || hw_vol > 10) hw_vol = 10;
     rgds_set_volume(hw_vol);
 
     /*
-     * 4. Ensure Weston Wayland environment variables match /etc/profile.d/myenv.sh
-     *    and Roms/APPS/Clock.sh on the RG DS Plus.
+     * 5. Ensure Weston Wayland & SDL2 touch environment variables match
+     *    /etc/profile.d/myenv.sh, Roms/APPS/Clock.sh, and /mnt/vendor/bin/dmenu.bin.
      */
     if (!getenv("XDG_RUNTIME_DIR")) {
         if (access("/var/run/0-runtime-dir/wayland-0", F_OK) == 0) {
@@ -822,9 +1125,13 @@ static void rgds_prepare_hardware_screens(void) {
     }
     setenv("SDL_VIDEO_DOUBLE_BUFFER", "1", 0);
     setenv("SDL_RENDER_VSYNC", "1", 0);
+    setenv("SDL_TOUCH_MOUSE_EVENTS", "0", 0);
+    setenv("SDL_MOUSE_TOUCH_EVENTS", "0", 0);
 }
 
 static void rgds_restore_hardware_screens(void) {
+    write_text_file("/tmp/.weston_drm.conf", "calibration:gt9xx-0:clear\n");
+    sysfs_write_int("/sys/class/anbernic_misc/tpctrl", 0);
     sysfs_write_int("/sys/class/anbernic_misc/runapp", 0);
     if (g_saved_lcdoff != 0) {
         sysfs_write_int("/sys/class/anbernic_misc/lcdoff", g_saved_lcdoff);
@@ -835,18 +1142,70 @@ static void rgds_restore_hardware_screens(void) {
 
 static void init_evdev_input(void) {
     g_num_evdev_fds = 0;
+    g_has_evdev_touch = false;
+
     for (int i = 0; i < MAX_EVDEV_FDS; i++) {
         char path[64];
         snprintf(path, sizeof(path), "/dev/input/event%d", i);
         int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd >= 0) {
-            g_evdev_fds[g_num_evdev_fds++] = fd;
+            int idx = g_num_evdev_fds++;
+            g_evdev_fds[idx]      = fd;
+            g_evdev_is_touch[idx] = false;
+            g_evdev_uses_mt[idx]  = false;
+            g_evdev_cur_slot[idx] = 0;
+            g_evdev_max_x[idx]    = RGDS_NATIVE_W;
+            g_evdev_max_y[idx]    = RGDS_NATIVE_H;
+
+            char name[128] = {0};
+            if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0) {
+                name[0] = '\0';
+            }
+
+            struct input_absinfo abs_x, abs_y, abs_slot;
+            memset(&abs_x, 0, sizeof(abs_x));
+            memset(&abs_y, 0, sizeof(abs_y));
+            memset(&abs_slot, 0, sizeof(abs_slot));
+
+            bool has_mt_x = (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &abs_x) == 0 && abs_x.maximum > 0);
+            bool has_mt_y = (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &abs_y) == 0 && abs_y.maximum > 0);
+
+            if (has_mt_x && has_mt_y) {
+                g_evdev_is_touch[idx] = true;
+                g_evdev_uses_mt[idx]  = true;
+                g_evdev_max_x[idx]    = abs_x.maximum;
+                g_evdev_max_y[idx]    = abs_y.maximum;
+                if (ioctl(fd, EVIOCGABS(ABS_MT_SLOT), &abs_slot) == 0) {
+                    g_evdev_cur_slot[idx] = abs_slot.value;
+                }
+                g_has_evdev_touch = true;
+            } else if (strstr(name, "goodix") || strstr(name, "gt9xx") ||
+                       strstr(name, "touch")  || strstr(name, "ts")) {
+                g_evdev_is_touch[idx] = true;
+                g_evdev_uses_mt[idx]  = true;
+                if (ioctl(fd, EVIOCGABS(ABS_X), &abs_x) == 0 && abs_x.maximum > 0) {
+                    g_evdev_max_x[idx] = abs_x.maximum;
+                }
+                if (ioctl(fd, EVIOCGABS(ABS_Y), &abs_y) == 0 && abs_y.maximum > 0) {
+                    g_evdev_max_y[idx] = abs_y.maximum;
+                }
+                g_has_evdev_touch = true;
+            }
         }
     }
 }
 
 int rgds_init(const char *app_title) {
     init_scale_lut();
+    g_touch_enabled = true;
+    g_tpctrl_guard_frames = 0;
+
+    int lcd_swap = sysfs_read_int("/sys/class/anbernic_misc/lcdswap", 0);
+    const char *env_swap = getenv("SDL2_SWAP_LCD");
+    if (env_swap && env_swap[0] == '1') lcd_swap = 1;
+    g_lcd_swap = lcd_swap;
+
+    rgds_reset_touch_slots();
     rgds_prepare_hardware_screens();
     init_evdev_input();
 
@@ -868,6 +1227,7 @@ int rgds_init(const char *app_title) {
 
     pSDL_Init                 = dlsym(g_sdl_lib, "SDL_Init");
     pSDL_Quit                 = dlsym(g_sdl_lib, "SDL_Quit");
+    pSDL_SetHint              = dlsym(g_sdl_lib, "SDL_SetHint");
     pSDL_GetNumVideoDisplays  = dlsym(g_sdl_lib, "SDL_GetNumVideoDisplays");
     pSDL_GetDisplayBounds     = dlsym(g_sdl_lib, "SDL_GetDisplayBounds");
     pSDL_CreateWindow         = dlsym(g_sdl_lib, "SDL_CreateWindow");
@@ -883,6 +1243,17 @@ int rgds_init(const char *app_title) {
     pSDL_DestroyRenderer      = dlsym(g_sdl_lib, "SDL_DestroyRenderer");
     pSDL_DestroyWindow        = dlsym(g_sdl_lib, "SDL_DestroyWindow");
 
+    /*
+     * Set SDL2 touch & Wayland hints before SDL_Init, matching /mnt/vendor/bin/dmenu.bin
+     * (0x13434..0x13468) so touch events are delivered cleanly without synthetic mouse clutter.
+     */
+    if (pSDL_SetHint) {
+        pSDL_SetHint("SDL_ACCELEROMETER_AS_JOYSTICK", "0");
+        pSDL_SetHint("SDL_TOUCH_MOUSE_EVENTS", "0");
+        pSDL_SetHint("SDL_MOUSE_TOUCH_EVENTS", "0");
+        pSDL_SetHint("SDL_VIDEO_WAYLAND_MODE_EMULATION", "0");
+    }
+
     if (!pSDL_Init || pSDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "[rgds_sdk] ERROR: SDL_Init(SDL_INIT_VIDEO) failed\n");
         return -1;
@@ -890,10 +1261,6 @@ int rgds_init(const char *app_title) {
     if (pSDL_ShowCursor) pSDL_ShowCursor(0);
 
     int num_displays = pSDL_GetNumVideoDisplays ? pSDL_GetNumVideoDisplays() : 1;
-    int lcd_swap = sysfs_read_int("/sys/class/anbernic_misc/lcdswap", 0);
-    const char *env_swap = getenv("SDL2_SWAP_LCD");
-    if (env_swap && env_swap[0] == '1') lcd_swap = 1;
-
     int top_disp = (num_displays >= 2) ? (lcd_swap ? 1 : 0) : 0;
     int bot_disp = (num_displays >= 2) ? (lcd_swap ? 0 : 1) : 0;
     int disp_idx[2] = { top_disp, bot_disp };
@@ -935,8 +1302,12 @@ int rgds_init(const char *app_title) {
         }
     }
 
+    /* Re-assert tpctrl = 0 after window creation in case background subscreen/launch.sh ran */
+    rgds_apply_hw_touch_config(true);
+
     snprintf(g_backend_desc, sizeof(g_backend_desc),
-             "RG DS Plus Weston/SDL2 (%d displays, 1024x768 x 2, swap=%d)", num_displays, lcd_swap);
+             "RG DS Plus Weston/SDL2 (%d displays, 1024x768 x 2, swap=%d, touch=%s)",
+             num_displays, lcd_swap, g_has_evdev_touch ? "goodix-ts" : "sdl2");
     return 0;
 }
 
@@ -944,34 +1315,100 @@ bool rgds_poll_input(rgds_input_state_t *out_input) {
     uint32_t pressed_latch  = 0;
     uint32_t released_latch = 0;
 
-    /* 1. Drain SDL2 window events */
+    /*
+     * Guard against asynchronous `/mnt/vendor/subscreen/launch.sh apk apps 0 &` writing
+     * `echo 1 > /sys/class/anbernic_misc/tpctrl` shortly after process launch.
+     */
+    if (g_touch_enabled && g_tpctrl_guard_frames < 180) {
+        if ((g_tpctrl_guard_frames % 15) == 0) {
+            if (sysfs_read_int("/sys/class/anbernic_misc/tpctrl", 0) != 0) {
+                rgds_apply_hw_touch_config(true);
+            }
+        }
+        g_tpctrl_guard_frames++;
+    }
+
+    /*
+     * 1. Drain SDL2 window events (and process SDL_FINGERDOWN/UP/MOTION if raw
+     *    goodix-ts evdev is not directly open, matching dmenu.bin touch_handl_poll @ 0x48b58).
+     */
     if (pSDL_PollEvent) {
         rgds_sdl_event_t ev;
         while (pSDL_PollEvent(&ev)) {
             if (ev.type == SDL_QUIT_EVENT) {
                 g_quit_requested = true;
+            } else if (!g_has_evdev_touch && g_touch_enabled &&
+                       (ev.type == SDL_FINGERDOWN_EVENT ||
+                        ev.type == SDL_FINGERUP_EVENT ||
+                        ev.type == SDL_FINGERMOTION_EVENT)) {
+                int slot = (int)ev.tfinger.fingerId;
+                if (slot >= 0 && slot < RGDS_MAX_TOUCH_POINTS) {
+                    int nx = clamp_int((int)(ev.tfinger.x * (float)RGDS_NATIVE_W), 0, RGDS_NATIVE_W - 1);
+                    int ny = clamp_int((int)(ev.tfinger.y * (float)RGDS_NATIVE_H), 0, RGDS_NATIVE_H - 1);
+                    int pr = clamp_int((int)(ev.tfinger.pressure * 255.0f), 1, 255);
+                    g_touch_slots[slot].raw_x  = nx;
+                    g_touch_slots[slot].raw_y  = ny;
+                    g_touch_slots[slot].screen = g_lcd_swap ? RGDS_SCREEN_TOP : RGDS_SCREEN_BOTTOM;
+                    if (ev.type == SDL_FINGERDOWN_EVENT) {
+                        if (!g_touch_slots[slot].down) {
+                            g_touch_slots[slot].pressed_latch = true;
+                        }
+                        g_touch_slots[slot].down     = true;
+                        g_touch_slots[slot].pressure = pr;
+                    } else if (ev.type == SDL_FINGERMOTION_EVENT) {
+                        g_touch_slots[slot].down     = true;
+                        g_touch_slots[slot].pressure = pr;
+                    } else if (ev.type == SDL_FINGERUP_EVENT) {
+                        if (g_touch_slots[slot].down || g_touch_slots[slot].pressed_latch) {
+                            g_touch_slots[slot].released_latch = true;
+                        }
+                        g_touch_slots[slot].down     = false;
+                        g_touch_slots[slot].pressure = 0;
+                    }
+                }
             }
         }
     }
 
-    /* 2. Read raw Linux input events from ANBERNIC-rk3568-keys (/dev/input/event*) */
+    /*
+     * 2. Read raw Linux input events from /dev/input/event*:
+     *    - "ANBERNIC-rk3568-keys": buttons (EV_KEY) and D-Pad (EV_ABS ABS_HAT0X/Y)
+     *    - "goodix-ts" (Goodix GT911 @ I2C5 0x14): 10-slot Multi-Touch Protocol B
+     *      (ABS_MT_SLOT, ABS_MT_TRACKING_ID, ABS_MT_POSITION_X/Y, ABS_MT_TOUCH_MAJOR)
+     */
     for (int i = 0; i < g_num_evdev_fds; i++) {
         struct input_event ev;
         while (read(g_evdev_fds[i], &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
             if (ev.type == EV_KEY) {
+                if (ev.code == BTN_TOUCH && g_evdev_is_touch[i] && !g_evdev_uses_mt[i] && g_touch_enabled) {
+                    if (ev.value == 1) {
+                        if (!g_touch_slots[0].down) g_touch_slots[0].pressed_latch = true;
+                        g_touch_slots[0].down     = true;
+                        g_touch_slots[0].pressure = 128;
+                        g_touch_slots[0].screen   = g_lcd_swap ? RGDS_SCREEN_TOP : RGDS_SCREEN_BOTTOM;
+                    } else if (ev.value == 0) {
+                        if (g_touch_slots[0].down || g_touch_slots[0].pressed_latch) {
+                            g_touch_slots[0].released_latch = true;
+                        }
+                        g_touch_slots[0].down     = false;
+                        g_touch_slots[0].pressure = 0;
+                    }
+                    continue;
+                }
+
                 uint32_t mask = 0;
                 switch (ev.code) {
-                    case 304: case KEY_SPACE:     mask = RGDS_BTN_A;      break;
-                    case 305: case KEY_BACKSPACE: mask = RGDS_BTN_B;      break;
-                    case 306:                     mask = RGDS_BTN_Y;      break;
-                    case 307:                     mask = RGDS_BTN_X;      break;
-                    case 308:                     mask = RGDS_BTN_L1;     break;
-                    case 309:                     mask = RGDS_BTN_R1;     break;
-                    case 310:                     mask = RGDS_BTN_SELECT; break;
-                    case 311: case KEY_ENTER:     mask = RGDS_BTN_START;  break;
-                    case 312: case KEY_ESC:       mask = RGDS_BTN_MENU;   break;
-                    case 314:                     mask = RGDS_BTN_L2;     break;
-                    case 315:                     mask = RGDS_BTN_R2;     break;
+                    case 304: case KEY_SPACE:     mask = RGDS_BTN_A;        break;
+                    case 305: case KEY_BACKSPACE: mask = RGDS_BTN_B;        break;
+                    case 306:                     mask = RGDS_BTN_Y;        break;
+                    case 307:                     mask = RGDS_BTN_X;        break;
+                    case 308:                     mask = RGDS_BTN_L1;       break;
+                    case 309:                     mask = RGDS_BTN_R1;       break;
+                    case 310:                     mask = RGDS_BTN_SELECT;   break;
+                    case 311: case KEY_ENTER:     mask = RGDS_BTN_START;    break;
+                    case 312: case KEY_ESC:       mask = RGDS_BTN_MENU;     break;
+                    case 314:                     mask = RGDS_BTN_L2;       break;
+                    case 315:                     mask = RGDS_BTN_R2;       break;
                     case 317:                     mask = RGDS_BTN_L3;       break;
                     case 318:                     mask = RGDS_BTN_R3;       break;
                     case KEY_VOLUMEUP:            mask = RGDS_BTN_VOL_UP;   break;
@@ -1005,6 +1442,61 @@ bool rgds_poll_input(rgds_input_state_t *out_input) {
                     pressed_latch  |= (new_ud & ~old_ud);
                     released_latch |= (old_ud & ~new_ud);
                     g_hw_held = (g_hw_held & ~(RGDS_BTN_UP | RGDS_BTN_DOWN)) | new_ud;
+                } else if (g_evdev_is_touch[i] && g_touch_enabled) {
+                    int slot = g_evdev_cur_slot[i];
+                    int max_x = (g_evdev_max_x[i] > 0) ? g_evdev_max_x[i] : RGDS_NATIVE_W;
+                    int max_y = (g_evdev_max_y[i] > 0) ? g_evdev_max_y[i] : RGDS_NATIVE_H;
+
+                    if (ev.code == ABS_MT_SLOT) {
+                        g_evdev_uses_mt[i]  = true;
+                        g_evdev_cur_slot[i] = ev.value;
+                    } else if (ev.code == ABS_MT_TRACKING_ID) {
+                        g_evdev_uses_mt[i] = true;
+                        if (slot >= 0 && slot < RGDS_MAX_TOUCH_POINTS) {
+                            if (ev.value >= 0) {
+                                if (!g_touch_slots[slot].down) {
+                                    g_touch_slots[slot].pressed_latch = true;
+                                }
+                                g_touch_slots[slot].down   = true;
+                                g_touch_slots[slot].screen = g_lcd_swap ? RGDS_SCREEN_TOP : RGDS_SCREEN_BOTTOM;
+                                if (g_touch_slots[slot].pressure <= 0) {
+                                    g_touch_slots[slot].pressure = 128;
+                                }
+                            } else {
+                                if (g_touch_slots[slot].down || g_touch_slots[slot].pressed_latch) {
+                                    g_touch_slots[slot].released_latch = true;
+                                }
+                                g_touch_slots[slot].down     = false;
+                                g_touch_slots[slot].pressure = 0;
+                            }
+                        }
+                    } else if (ev.code == ABS_MT_POSITION_X) {
+                        g_evdev_uses_mt[i] = true;
+                        if (slot >= 0 && slot < RGDS_MAX_TOUCH_POINTS) {
+                            int nx = (max_x == RGDS_NATIVE_W) ? ev.value : (ev.value * RGDS_NATIVE_W) / max_x;
+                            g_touch_slots[slot].raw_x  = clamp_int(nx, 0, RGDS_NATIVE_W - 1);
+                            g_touch_slots[slot].screen = g_lcd_swap ? RGDS_SCREEN_TOP : RGDS_SCREEN_BOTTOM;
+                        }
+                    } else if (ev.code == ABS_MT_POSITION_Y) {
+                        g_evdev_uses_mt[i] = true;
+                        if (slot >= 0 && slot < RGDS_MAX_TOUCH_POINTS) {
+                            int ny = (max_y == RGDS_NATIVE_H) ? ev.value : (ev.value * RGDS_NATIVE_H) / max_y;
+                            g_touch_slots[slot].raw_y  = clamp_int(ny, 0, RGDS_NATIVE_H - 1);
+                            g_touch_slots[slot].screen = g_lcd_swap ? RGDS_SCREEN_TOP : RGDS_SCREEN_BOTTOM;
+                        }
+                    } else if (ev.code == ABS_MT_TOUCH_MAJOR ||
+                               ev.code == ABS_MT_WIDTH_MAJOR ||
+                               ev.code == ABS_MT_PRESSURE) {
+                        if (slot >= 0 && slot < RGDS_MAX_TOUCH_POINTS) {
+                            g_touch_slots[slot].pressure = clamp_int(ev.value, 1, 255);
+                        }
+                    } else if (ev.code == ABS_X && !g_evdev_uses_mt[i]) {
+                        int nx = (max_x == RGDS_NATIVE_W) ? ev.value : (ev.value * RGDS_NATIVE_W) / max_x;
+                        g_touch_slots[0].raw_x = clamp_int(nx, 0, RGDS_NATIVE_W - 1);
+                    } else if (ev.code == ABS_Y && !g_evdev_uses_mt[i]) {
+                        int ny = (max_y == RGDS_NATIVE_H) ? ev.value : (ev.value * RGDS_NATIVE_H) / max_y;
+                        g_touch_slots[0].raw_y = clamp_int(ny, 0, RGDS_NATIVE_H - 1);
+                    }
                 }
             }
         }
@@ -1044,6 +1536,8 @@ bool rgds_poll_input(rgds_input_state_t *out_input) {
         (((g_hw_held | pressed_latch) & (RGDS_BTN_START | RGDS_BTN_SELECT)) == (RGDS_BTN_START | RGDS_BTN_SELECT))) {
         g_quit_requested = true;
     }
+
+    rgds_finalize_touch_frame(out_input ? &out_input->touch : NULL);
 
     if (out_input) {
         out_input->held     = g_hw_held;

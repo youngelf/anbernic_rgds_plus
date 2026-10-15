@@ -4,7 +4,8 @@
  * Target Hardware:
  *   - SoC: Rockchip RK3568 (Quad-core ARM Cortex-A55 @ 1.8GHz, aarch64)
  *   - Displays: Dual 1024x768 (4:3) IPS LCDs via Weston/Wayland (DSI-1 & DSI-2)
- *   - Input: /dev/input/event* ("ANBERNIC-rk3568-keys") + SDL2 GameController/Keyboard
+ *   - Input: /dev/input/event* ("ANBERNIC-rk3568-keys" + "goodix-ts" GT911 10-point touch)
+ *            + SDL2 GameController/Keyboard/TouchFingerEvent
  *   - Firmware: RG-DS-PLUS-EN16GB-V1.0 (Linux 4.19/5.10 + Weston + SDL2)
  *
  * Host Simulator (compiled with -DHOST_X11):
@@ -105,15 +106,81 @@ typedef enum {
     RGDS_BTN_VOL_DOWN = (1u << 18)   /* evdev 114 (KEY_VOLUMEDOWN) */
 } rgds_button_t;
 
+/* ============================================================================
+ * 2B. CAPACITIVE TOUCHSCREEN DEFINITIONS ("goodix-ts", Goodix GT911 on I2C5 0x14)
+ * ============================================================================
+ * Verified from RG-DS-PLUS-EN16GB-V1.0 kernel (vmlinux gt9xx driver @ 0xc49100),
+ * device tree (/i2c@fe5e0000/gt9xx-0@14), and /mnt/vendor/bin/dmenu.bin Touch Test:
+ *   - Hardware: Goodix GT911 10-point capacitive touch panel (1024x768) mounted on
+ *     the Lower Screen (Weston Display 1, or Display 0 when lcdswap=1).
+ *   - Kernel Gate (/sys/class/anbernic_misc/tpctrl):
+ *       0 = Touch input ENABLED in kernel gt9xx IRQ handler (allen_get_tpctrl() == 0).
+ *       1 = Touch input DISABLED in kernel (dmenu.bin and subscreen/launch.sh write 1
+ *           when launching external apps, so rgds_init() writes 0 to re-enable touch).
+ *   - Weston Calibration (/tmp/.weston_drm.conf):
+ *       "calibration:gt9xx-0:0.5 0 0.5 0 1 0" maps touch across the 2048x768 dual-screen
+ *       horizontal desktop onto Display 1 (x: 1024..2048, y: 0..768).
+ *   - Linux evdev Multi-Touch Protocol Type B ("goodix-ts"):
+ *       EV_ABS (0x03):
+ *         ABS_MT_SLOT        (0x2f / 47) -> Finger slot index (0..9)
+ *         ABS_MT_TRACKING_ID (0x39 / 57) -> Slot ID (0..9) on touch/move, -1 on release
+ *         ABS_MT_POSITION_X  (0x35 / 53) -> Native X coordinate (0..1024)
+ *         ABS_MT_POSITION_Y  (0x36 / 54) -> Native Y coordinate (0..768)
+ *         ABS_MT_TOUCH_MAJOR (0x30 / 48) -> Touch contact size (0..255)
+ *         ABS_MT_WIDTH_MAJOR (0x32 / 50) -> Touch width (0..255)
+ *   - SDL2 Touch Events (used by dmenu.bin Touch Panel Test):
+ *       SDL_FINGERDOWN (0x700), SDL_FINGERUP (0x701), SDL_FINGERMOTION (0x702)
+ * ============================================================================ */
+
+#define RGDS_MAX_TOUCH_POINTS 10
+
+/* State of an individual multi-touch finger slot (0 .. RGDS_MAX_TOUCH_POINTS - 1) */
 typedef struct {
-    uint32_t held;       /* Bitmask of buttons currently held down */
-    uint32_t pressed;    /* Bitmask of buttons newly pressed this frame (rising edge) */
-    uint32_t released;   /* Bitmask of buttons newly released this frame (falling edge) */
-    bool     quit_req;   /* True if window close, ESC/Q, MENU, or START+SELECT was triggered */
+    bool          active;        /* True while this finger slot is touching the screen */
+    bool          just_pressed;  /* True on the frame this finger first touched down */
+    bool          just_released; /* True on the frame this finger lifted off */
+    int           id;            /* Slot / tracking ID (0 .. RGDS_MAX_TOUCH_POINTS - 1) */
+    int           x;             /* Logical canvas X (0 .. RGDS_CANVAS_W - 1, i.e. 0..319) */
+    int           y;             /* Logical canvas Y (0 .. RGDS_CANVAS_H - 1, i.e. 0..239) */
+    int           dx;            /* Logical canvas delta X since previous frame */
+    int           dy;            /* Logical canvas delta Y since previous frame */
+    int           native_x;      /* Native panel X (0 .. RGDS_NATIVE_W - 1, i.e. 0..1023) */
+    int           native_y;      /* Native panel Y (0 .. RGDS_NATIVE_H - 1, i.e. 0..767) */
+    int           native_dx;     /* Native panel delta X since previous frame */
+    int           native_dy;     /* Native panel delta Y since previous frame */
+    int           pressure;      /* Contact size / pressure (0..255, or 0 when released) */
+    rgds_screen_t screen;        /* Screen touched (RGDS_SCREEN_BOTTOM, or TOP in sim/swap) */
+} rgds_touch_point_t;
+
+/* Aggregate touchscreen state (convenient primary-finger fields + 10-point multi-touch array) */
+typedef struct {
+    bool               touching;      /* True if at least one finger is currently touching */
+    bool               just_pressed;  /* True on the frame a touch began */
+    bool               just_released; /* True on the frame a touch ended */
+    int                count;         /* Number of currently active fingers (0..10) */
+    int                x;             /* Primary touch logical canvas X (0..319) */
+    int                y;             /* Primary touch logical canvas Y (0..239) */
+    int                dx;            /* Primary touch logical canvas delta X */
+    int                dy;            /* Primary touch logical canvas delta Y */
+    int                native_x;      /* Primary touch native X (0..1023) */
+    int                native_y;      /* Primary touch native Y (0..767) */
+    int                native_dx;     /* Primary touch native delta X */
+    int                native_dy;     /* Primary touch native delta Y */
+    int                pressure;      /* Primary touch contact size/pressure (0..255) */
+    rgds_screen_t      screen;        /* Screen of primary touch (default RGDS_SCREEN_BOTTOM) */
+    rgds_touch_point_t points[RGDS_MAX_TOUCH_POINTS]; /* All 10 multi-touch finger slots */
+} rgds_touch_state_t;
+
+typedef struct {
+    uint32_t           held;       /* Bitmask of buttons currently held down */
+    uint32_t           pressed;    /* Bitmask of buttons newly pressed this frame (rising edge) */
+    uint32_t           released;   /* Bitmask of buttons newly released this frame (falling edge) */
+    bool               quit_req;   /* True if window close, ESC/Q, MENU, or START+SELECT was triggered */
+    rgds_touch_state_t touch;      /* Capacitive touchscreen state (single-touch + 10-point multi-touch) */
 } rgds_input_state_t;
 
 /* ============================================================================
- * 3. CORE LIFECYCLE & VOLUME CONTROL API
+ * 3. CORE LIFECYCLE, TOUCHSCREEN & VOLUME CONTROL API
  * ============================================================================ */
 
 /*
@@ -124,13 +191,16 @@ typedef struct {
  *          runapp = 1 while running.
  *       2. Ensures both 1024x768 LCDs are powered on (/sys/class/anbernic_misc/lcdoff = 0)
  *          and records the previous lcdoff value to restore on shutdown.
- *       3. Respects /sys/class/anbernic_misc/lcdswap (or SDL2_SWAP_LCD=1).
- *       4. Opens two 1024x768 fullscreen SDL2 windows on Weston Display 0 and Display 1
+ *       3. Enables kernel touchscreen reporting (/sys/class/anbernic_misc/tpctrl = 0)
+ *          and configures Weston dual-display touch calibration in /tmp/.weston_drm.conf.
+ *       4. Respects /sys/class/anbernic_misc/lcdswap (or SDL2_SWAP_LCD=1).
+ *       5. Opens two 1024x768 fullscreen SDL2 windows on Weston Display 0 and Display 1
  *          (with automatic fallback to /dev/fb0 + /dev/fb1 if needed).
- *       5. Opens /dev/input/event* ("ANBERNIC-rk3568-keys") in non-blocking mode and
- *          synchronizes system audio volume from /sys/class/anbernic_misc/openbor_volume.
+ *       6. Opens /dev/input/event* ("ANBERNIC-rk3568-keys" and "goodix-ts") in non-blocking
+ *          mode and synchronizes system audio volume from /sys/class/anbernic_misc/openbor_volume.
  *   - On Linux Host (-DHOST_X11):
- *       Opens a dual-screen X11 simulator window showing both 1024x768 screens.
+ *       Opens a dual-screen X11 simulator window showing both 1024x768 screens with mouse
+ *       click-and-drag touchscreen emulation.
  *
  * Returns 0 on success, or -1 on error.
  */
@@ -138,18 +208,34 @@ int rgds_init(const char *app_title);
 
 /*
  * Cleanly shut down the SDK, destroy windows, close input devices, and restore
- * any modified RG DS Plus hardware state (/sys/class/anbernic_misc/lcdoff).
+ * any modified RG DS Plus hardware state (/sys/class/anbernic_misc/lcdoff and
+ * /tmp/.weston_drm.conf).
  */
 void rgds_shutdown(void);
 
 /*
- * Poll all hardware buttons (evdev + SDL2 events or X11 keyboard) and populate `out_input`.
+ * Poll all hardware buttons and touchscreen events (evdev + SDL2 events or X11
+ * keyboard/mouse) and populate `out_input`.
  * Also handles physical Volume Up (115) / Volume Down (114) presses (and hold auto-repeat)
  * by updating /sys/class/anbernic_misc/openbor_volume and PulseAudio sink volume via
  * /mnt/vendor/ctrl/setPulseaudio.sh (or screen brightness when SELECT/START is held).
  * Returns false if the user requested application exit (MENU, START+SELECT, ESC, or window close).
  */
 bool rgds_poll_input(rgds_input_state_t *out_input);
+
+/*
+ * Enable or disable hardware touchscreen input reporting.
+ * On RG DS Plus hardware, controls /sys/class/anbernic_misc/tpctrl
+ * (0 = touch enabled in kernel gt9xx driver, 1 = touch disabled in kernel)
+ * and updates /tmp/.weston_drm.conf calibration for gt9xx-0.
+ * Touchscreen reporting is enabled automatically by rgds_init().
+ */
+void rgds_set_touch_enabled(bool enabled);
+
+/*
+ * Return true if touchscreen input reporting is currently enabled.
+ */
+bool rgds_is_touch_enabled(void);
 
 /*
  * Get the current system audio volume step (0..10, where 0 = Mute, 10 = 100%).

@@ -13,7 +13,8 @@ sdk/
 ├── src/
 │   └── rgds_sdk.c             # Hardware backend (Weston/SDL2 + evdev) & Host X11 simulator
 ├── examples/
-│   └── hello_rgds.c           # Sample "HELLO" (Top) / "WORLD" + Live Button Inspector (Bottom)
+│   ├── hello_rgds.c           # Sample "HELLO" (Top) / "WORLD" + Button & Touch Inspector (Bottom)
+│   └── hello_touch.c          # Multi-touch starter app: touch UI toolbar, 10-finger pad & pinch gauge
 ├── scripts/
 │   ├── setup_host.sh          # Installs Linux host dependencies (system apt or rootless cache)
 │   ├── App_Template.sh        # Launcher template that stops subscreen.dge & wakes both LCDs
@@ -22,7 +23,7 @@ sdk/
 │   └── deploy_to_img.sh       # Injects the app directly into an unmounted .IMG file (Partition 11)
 ├── assets/
 │   └── icon.png               # Default 32x32 RGBA icon for App Center (Roms/APPS/Imgs/)
-├── Makefile                   # Builds both `hello_rgds` (aarch64) and `hello_rgds_linux` (x86_64)
+├── Makefile                   # Builds `hello_rgds` & `hello_touch` (aarch64 + x86_64 simulator)
 └── README.md                  # Programmer's Reference Manual (this document)
 ```
 
@@ -126,10 +127,15 @@ When `SDL_Init(SDL_INIT_VIDEO)` connects to Weston on the RG DS Plus:
    - PulseAudio speaker (`alsa_output.1.stereo-fallback`) and headphone (`alsa_output.0.HiFi__Speaker__sink`) sink volumes via `/mnt/vendor/ctrl/setPulseaudio.sh volume spk|hp <pct>` using the stock firmware lookup table `{ 0, 22, 36, 44, 50, 56, 62, 70, 80, 90, 100 }`, and
    - Screen brightness (`/sys/class/anbernic_misc/brightness` + `/mnt/vendor/bin/bright.dge`) when `SELECT` or `START` is held while pressing Volume Up/Down.
    You can also query or set the volume programmatically via `rgds_get_volume()`, `rgds_set_volume(level_0_to_10)`, and `rgds_volume_to_percent(level_0_to_10)`.
+5. **Enabling the Capacitive Touchscreen (`tpctrl = 0` & Weston Calibration)**:
+   When `dmenu.bin` exits to launch any external application (`set_touch_inpt(0)` at `0x15194`) and when `/mnt/vendor/subscreen/launch.sh` runs in the background, the stock firmware writes `1` to `/sys/class/anbernic_misc/tpctrl`. Inside the kernel (`gt9xx` driver at `0xc4931c` calling `allen_get_tpctrl()` at `0xc27d84`), **`tpctrl != 0` causes the kernel driver to silently drop all touch interrupts**.
+   [`rgds_init()`](src/rgds_sdk.c) and [`scripts/App_Template.sh`](scripts/App_Template.sh) automatically write `0` to `/sys/class/anbernic_misc/tpctrl` and configure `/tmp/.weston_drm.conf` (`calibration:gt9xx-0:0.5 0 0.5 0 1 0`) so touch input is immediately active for your application.
 
 ---
 
-## 4. Complete Button Mapping Reference (`ANBERNIC-rk3568-keys`)
+## 4. Complete Button & Capacitive Touchscreen Reference
+
+### 4.1 Physical Buttons (`ANBERNIC-rk3568-keys`)
 
 On the RG DS Plus, physical buttons are exposed via the Linux kernel `evdev` subsystem (`/dev/input/event*`) under the device name **`ANBERNIC-rk3568-keys`**. The table below lists the exact Linux event type, decimal/hex code, SDK bitmask constant, and X11 desktop simulator key mapping:
 
@@ -155,13 +161,38 @@ On the RG DS Plus, physical buttons are exposed via the Linux kernel `evdev` sub
 
 > **Note on D-Pad Events**: On the RG DS Plus (`ANBERNIC-rk3568-keys`), the D-Pad does **not** emit `KEY_UP`/`KEY_DOWN`/`KEY_LEFT`/`KEY_RIGHT` (`EV_KEY`) by default; instead, it emits `EV_ABS` events on `ABS_HAT0X` (`code 16`, value `-1` for Left, `0` for Release, `+1` for Right) and `ABS_HAT0Y` (`code 17`, value `-1` for Up, `0` for Release, `+1` for Down). [`rgds_poll_input()`](src/rgds_sdk.c) handles **both** `ABS_HAT0X`/`ABS_HAT0Y` and `KEY_UP`/`DOWN`/`LEFT`/`RIGHT` transparently.
 
+### 4.2 Capacitive Touchscreen (`goodix-ts`, Goodix GT911 on I2C5 `0x14`)
+
+Verified from the kernel device tree (`/i2c@fe5e0000/gt9xx-0@14`), kernel driver (`gt9xx` @ `0xc49100`), and the built-in touchscreen tester in `/mnt/vendor/bin/dmenu.bin` (`Touch Panel Test`, `0x13434`..`0x136e4` and `0x48b58`..`0x49d50`):
+- **Hardware Controller**: Goodix GT911 (`compatible = "goodix,gt9xx"`, `tp-size = <911>`, `max-x = <1024>`, `max-y = <768>`), mounted on the **Lower Screen** (`RGDS_SCREEN_BOTTOM`, or `RGDS_SCREEN_TOP` when `lcdswap=1`).
+- **Kernel `evdev` Device Name**: `"goodix-ts"` (`phys = "input/ts"`, `bustype = BUS_I2C`).
+- **Multi-Touch Protocol**: Linux Multi-Touch Protocol Type B (`RGDS_MAX_TOUCH_POINTS = 10` simultaneous slots `0..9`):
+  - `ABS_MT_SLOT` (`0x2f` / `47`): Finger slot index (`0..9`)
+  - `ABS_MT_TRACKING_ID` (`0x39` / `57`): Slot ID (`0..9`) on touch/motion, `-1` on lift/release
+  - `ABS_MT_POSITION_X` (`0x35` / `53`): Native X coordinate (`0..1024`)
+  - `ABS_MT_POSITION_Y` (`0x36` / `54`): Native Y coordinate (`0..768`)
+  - `ABS_MT_TOUCH_MAJOR` (`0x30` / `48`) & `ABS_MT_WIDTH_MAJOR` (`0x32` / `50`): Contact size (`0..255`)
+- **SDL2 Fallback**: If raw `/dev/input/event*` access is unavailable, [`rgds_poll_input()`](src/rgds_sdk.c) also parses `SDL_FINGERDOWN` (`0x700`), `SDL_FINGERUP` (`0x701`), and `SDL_FINGERMOTION` (`0x702`) events identically to `dmenu.bin`'s built-in Touch Panel Test.
+- **SDK Touch State (`input.touch`)**:
+  - Single-touch convenience fields: `input.touch.touching`, `input.touch.just_pressed`, `input.touch.just_released`, `input.touch.count`, `input.touch.x` (`0..319`), `input.touch.y` (`0..239`), `input.touch.dx`, `input.touch.dy`, `input.touch.native_x` (`0..1023`), `input.touch.native_y` (`0..767`), `input.touch.pressure`, `input.touch.screen`.
+  - Full 10-point multi-touch array: `input.touch.points[0 .. RGDS_MAX_TOUCH_POINTS - 1]`.
+  - In the Linux X11 desktop simulator (`-DHOST_X11`), left-clicking and dragging the mouse on either simulated screen emulates touch input on that screen.
+
 ---
 
-## 5. Building & Running the Sample "Hello World" Program
+## 5. Building & Running the Sample Applications (`hello_rgds` & `hello_touch`)
 
-The sample application in [`examples/hello_rgds.c`](examples/hello_rgds.c) renders:
-- **Upper Screen (`RGDS_SCREEN_TOP`, `1024×768`)**: A large `"HELLO"` banner that you can move around with the **D-Pad** (press **X** to re-center), along with live uptime and **A**/**B** press counters.
-- **Lower Screen (`RGDS_SCREEN_BOTTOM`, `1024×768`)**: A large `"WORLD"` banner above a real-time **Interactive Button Tester** that highlights every RG DS Plus button (`L1`, `L2`, `R1`, `R2`, D-Pad, `SELECT`, `MENU`, `START`, `A`, `B`, `X`, `Y`) as you press it.
+The SDK includes two heavily commented starter applications in [`examples/`](examples/):
+
+### 5.1 `hello_rgds` ([`examples/hello_rgds.c`](examples/hello_rgds.c)) — Dual-Screen "Hello World" & Hardware Tester
+- **Upper Screen (`RGDS_SCREEN_TOP`, `1024×768`)**: A large `"HELLO"` banner that you can move around with the **D-Pad** (press **X** to re-center), along with live uptime, **A**/**B** press counters, and real-time touchscreen coordinate telemetry.
+- **Lower Screen (`RGDS_SCREEN_BOTTOM`, `1024×768`)**: A large `"WORLD"` banner above a real-time **Interactive Button & 10-Point Touchscreen Tester** that highlights every RG DS Plus button as you press it and draws live multi-touch crosshairs (`T0..T9`) and a persistent touch drawing trail (press **Y** to clear trail).
+
+### 5.2 `hello_touch` ([`examples/hello_touch.c`](examples/hello_touch.c)) — Multi-Touch UI & Canvas Starter App
+Designed as a documented starting point for writing touch-driven utilities and games:
+- **Single-Touch UI Toolbar (`input.touch.just_pressed`)**: On-screen clickable color swatch buttons (`CYN`, `YEL`, `GRN`, `ORG`, `RED`, `WHT`), brush size toggle (`SZ:1` / `SZ:2` / `SZ:3`), and a `CLEAR` button on the Lower Touchscreen.
+- **10-Point Simultaneous Multi-Touch Canvas (`input.touch.points[0..9]`)**: Uses Bresenham stroke interpolation (`pt->dx`, `pt->dy`) so up to 10 fingers can draw smooth, continuous strokes simultaneously on the Lower Screen, with pressure-reactive finger reticles (`F0..F9`).
+- **2-Finger Pinch/Spread Chord Visualizer**: When 2 or more fingers touch the screen at the same time, draws a live connecting chord and midpoint marker between the first two active fingers on the Lower Screen and renders a real-time pixel distance gauge on the Upper Screen alongside a 10-slot coordinate inspector table.
 
 ### Build Both Targets (`aarch64` Device + `x86_64` Host Simulator)
 ```bash
@@ -169,16 +200,18 @@ cd sdk
 make all linux
 ```
 This produces:
-1. `hello_rgds` (`ARM aarch64` stripped binary) + `sdcard_package/` ready for the RG DS Plus.
-2. `hello_rgds_linux` (`x86_64` X11 binary) for local testing on your Linux PC.
+1. `hello_rgds` and `hello_touch` (`ARM aarch64` stripped binaries) + `sdcard_package/` ready for the RG DS Plus.
+2. `hello_rgds_linux` and `hello_touch_linux` (`x86_64` X11 binaries) for local testing on your Linux PC.
 
 ### Run the Dual-Screen Simulator on Your Linux Desktop
 ```bash
-make run-linux
+make run-linux         # Launches ./hello_rgds_linux
+make run-touch-linux   # Launches ./hello_touch_linux
 ```
 By default, the X11 simulator scales each `1024×768` screen to `640×480` (`640×968` total height including the 8px clamshell hinge) so both stacked screens fit comfortably on a 1080p/1200p desktop monitor. To open at unscaled `1024×1544` (`1024×768` × 2):
 ```bash
 RGDS_FULL_1024=1 ./hello_rgds_linux
+RGDS_FULL_1024=1 ./hello_touch_linux
 ```
 
 ### Build Your Own C Program Using the SDK
@@ -191,7 +224,7 @@ make APP_NAME=My_Game APP_BIN=my_game APP_SRCS=my_game.c all linux
 
 ## 6. Deploying to an Anbernic RG DS Plus Machine
 
-The `scripts/` directory provides three ways to copy your compiled program to the device:
+The `scripts/` directory provides three ways to copy your compiled programs to the device:
 
 ### Method A: Copy to a Mounted microSD Card (`scripts/deploy_to_sdcard.sh`)
 Insert your RG DS Plus TF1 or TF2 microSD card into your Linux PC and run:
@@ -200,15 +233,14 @@ Insert your RG DS Plus TF1 or TF2 microSD card into your Linux PC and run:
 # Or let the script auto-detect the mounted SD card:
 make deploy-sd
 ```
-This installs both:
+This installs both `Hello_RGDS` and `Hello_Touch` into:
 - **App Center (`Roms/APPS`)**:
-  - `Roms/APPS/Hello_RGDS.sh`
-  - `Roms/APPS/Imgs/Hello_RGDS.png`
-  - `Roms/APPS/hello_rgds/hello_rgds`
+  - `Roms/APPS/Hello_RGDS.sh` & `Roms/APPS/hello_rgds/hello_rgds`
+  - `Roms/APPS/Hello_Touch.sh` & `Roms/APPS/hello_touch/hello_touch`
+  - `Roms/APPS/Imgs/Hello_RGDS.png` & `Roms/APPS/Imgs/Hello_Touch.png`
 - **Ports (`Ports`)**:
-  - `Ports/Hello_RGDS/launch.sh`
-  - `Ports/Hello_RGDS/hello_rgds`
-  - `Ports/Hello_RGDS/icon.png`
+  - `Ports/Hello_RGDS/launch.sh`, `hello_rgds`, `icon.png`
+  - `Ports/Hello_Touch/launch.sh`, `hello_touch`, `icon.png`
 
 ### Method B: Push Over Wi-Fi via SSH (`scripts/deploy_over_ssh.sh`)
 The RG DS Plus stock firmware runs OpenSSH (`S50sshd`) and Avahi mDNS (`S50avahi-daemon`, hostname `anbernic.local`) out of the box with `PermitRootLogin yes`.

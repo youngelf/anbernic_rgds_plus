@@ -34,6 +34,8 @@ A work timer to let folks know that you are working.
 
 ## [SDK](sdk/)
 
-An SDK which can be used to develop further applications, along with a
-simple hello world utility and a key tester.
+An SDK which can be used to develop further applications, supporting both `1024x768` dual screens via Weston/SDL2, all physical controls (`ANBERNIC-rk3568-keys`), and the 10-point capacitive touchscreen (`goodix-ts` Goodix GT911 on the lower screen, automatically enabled via `/sys/class/anbernic_misc/tpctrl`), along with a dual-screen Linux X11 desktop simulator and two heavily documented starter examples:
+
+- **`hello_rgds` ([`sdk/examples/hello_rgds.c`](sdk/examples/hello_rgds.c))**: A dual-screen "Hello World" utility and live hardware button & touchscreen inspector.
+- **`hello_touch` ([`sdk/examples/hello_touch.c`](sdk/examples/hello_touch.c))**: A multi-touch starter application demonstrating a simple clickable touch UI toolbar (color swatches, brush size, clear button), simultaneous 10-finger canvas drawing, a 2-finger pinch/spread distance gauge, and a live 10-slot coordinate inspector on the upper screen.
 

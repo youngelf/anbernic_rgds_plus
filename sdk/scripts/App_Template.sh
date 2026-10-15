@@ -41,7 +41,13 @@ if [ -w /sys/class/anbernic_misc/runapp ]; then
     echo 1 > /sys/class/anbernic_misc/runapp
 fi
 
-# 2. Power on both 1024x768 LCDs if user had single-screen mode (lcdoff != 0) active
+# 2. Enable kernel touchscreen reporting (tpctrl=0) & Weston dual-display calibration
+echo "calibration:gt9xx-0:0.5 0 0.5 0 1 0" > /tmp/.weston_drm.conf 2>/dev/null
+if [ -w /sys/class/anbernic_misc/tpctrl ]; then
+    echo 0 > /sys/class/anbernic_misc/tpctrl
+fi
+
+# 3. Power on both 1024x768 LCDs if user had single-screen mode (lcdoff != 0) active
 SAVED_LCDOFF=""
 if [ -r /sys/class/anbernic_misc/lcdoff ]; then
     SAVED_LCDOFF="$(cat /sys/class/anbernic_misc/lcdoff 2>/dev/null)"
@@ -51,7 +57,7 @@ if [ -r /sys/class/anbernic_misc/lcdoff ]; then
     fi
 fi
 
-# 3. Configure Weston/Wayland SDL2 environment (matching Roms/APPS/Clock.sh)
+# 4. Configure Weston/Wayland SDL2 environment (matching Roms/APPS/Clock.sh & drastic64/launch.sh)
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 if [ -d /var/run/0-runtime-dir ]; then
     export XDG_RUNTIME_DIR="/var/run/0-runtime-dir"
@@ -60,6 +66,8 @@ else
 fi
 export SDL_VIDEO_DOUBLE_BUFFER=1
 export SDL_RENDER_VSYNC=1
+export SDL_TOUCH_MOUSE_EVENTS="0"
+export SDL_MOUSE_TOUCH_EVENTS="0"
 
 if [ -r /sys/class/anbernic_misc/lcdswap ]; then
     if [ "$(cat /sys/class/anbernic_misc/lcdswap 2>/dev/null)" = "1" ]; then
@@ -71,7 +79,11 @@ cd "${APP_DIR}" || exit 1
 chmod +x "./${APP_BIN}" 2>/dev/null
 "./${APP_BIN}"
 
-# 4. Restore previous single-screen mode on exit if it was active
+# 5. Restore Weston calibration and previous single-screen mode on exit
+echo "calibration:gt9xx-0:clear" > /tmp/.weston_drm.conf 2>/dev/null
+if [ -w /sys/class/anbernic_misc/tpctrl ]; then
+    echo 0 > /sys/class/anbernic_misc/tpctrl
+fi
 if [ -n "${SAVED_LCDOFF}" ] && [ "${SAVED_LCDOFF}" != "0" ] && [ -w /sys/class/anbernic_misc/lcdoff ]; then
     echo "${SAVED_LCDOFF}" > /sys/class/anbernic_misc/lcdoff
     [ -x /mnt/vendor/bin/bright.dge ] && /mnt/vendor/bin/bright.dge
