@@ -22,7 +22,8 @@ sdk/
 │   ├── deploy_over_ssh.sh     # Pushes & optionally runs the binary over Wi-Fi SSH (root@anbernic.local)
 │   └── deploy_to_img.sh       # Injects the app directly into an unmounted .IMG file (Partition 11)
 ├── assets/
-│   └── icon.png               # Default 32x32 RGBA icon for App Center (Roms/APPS/Imgs/)
+│   ├── icon.png               # 240x180 RGBA Graduation Cap icon for Hello_RGDS
+│   └── icon_touch.png         # 240x180 RGBA Chemical Flask icon for Hello_Touch
 ├── Makefile                   # Builds `hello_rgds` & `hello_touch` (aarch64 + x86_64 simulator)
 └── README.md                  # Programmer's Reference Manual (this document)
 ```

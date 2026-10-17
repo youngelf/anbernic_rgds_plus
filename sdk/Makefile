@@ -102,10 +102,12 @@ package: $(APP_BIN) $(TOUCH_BIN)
 	sed "s/__APP_BIN__/$(APP_BIN)/g" scripts/App_Template.sh > sdcard_package/Ports/$(APP_NAME)/launch.sh
 	chmod +x sdcard_package/Roms/APPS/$(APP_NAME).sh sdcard_package/Roms/APPS/$(APP_BIN)/$(APP_BIN)
 	chmod +x sdcard_package/Ports/$(APP_NAME)/launch.sh sdcard_package/Ports/$(APP_NAME)/$(APP_BIN)
-	cp $(TOUCH_BIN) assets/icon.png sdcard_package/Roms/APPS/$(TOUCH_BIN)/
-	cp assets/icon.png sdcard_package/Roms/APPS/Imgs/$(TOUCH_NAME).png
+	cp $(TOUCH_BIN) sdcard_package/Roms/APPS/$(TOUCH_BIN)/
+	cp assets/icon_touch.png sdcard_package/Roms/APPS/$(TOUCH_BIN)/icon.png
+	cp assets/icon_touch.png sdcard_package/Roms/APPS/Imgs/$(TOUCH_NAME).png
 	sed "s/__APP_BIN__/$(TOUCH_BIN)/g" scripts/App_Template.sh > sdcard_package/Roms/APPS/$(TOUCH_NAME).sh
-	cp $(TOUCH_BIN) assets/icon.png sdcard_package/Ports/$(TOUCH_NAME)/
+	cp $(TOUCH_BIN) sdcard_package/Ports/$(TOUCH_NAME)/
+	cp assets/icon_touch.png sdcard_package/Ports/$(TOUCH_NAME)/icon.png
 	sed "s/__APP_BIN__/$(TOUCH_BIN)/g" scripts/App_Template.sh > sdcard_package/Ports/$(TOUCH_NAME)/launch.sh
 	chmod +x sdcard_package/Roms/APPS/$(TOUCH_NAME).sh sdcard_package/Roms/APPS/$(TOUCH_BIN)/$(TOUCH_BIN)
 	chmod +x sdcard_package/Ports/$(TOUCH_NAME)/launch.sh sdcard_package/Ports/$(TOUCH_NAME)/$(TOUCH_BIN)
