@@ -1,6 +1,6 @@
 # Anbernic RG DS Plus Dual-Screen Metronome (`1024x768` × 2)
 
-A dual-screen precision C metronome built specifically for the **Anbernic RG DS Plus** (Rockchip RK3568 `aarch64`, dual `1024x768` 4:3 IPS displays) running Anbernic's stock Linux OS (`RG-DS-PLUS-EN16GB-V1.0`), plus a native **x86_64 Linux (X11)** target that renders both screens in a stacked clamshell window for desktop testing.
+A dual-screen precision C metronome built on the **Anbernic RG DS Plus C SDK (`../sdk`)** for the **Anbernic RG DS Plus** (Rockchip RK3568 `aarch64`, dual `1024x768` 4:3 IPS displays) running Anbernic's stock Linux OS (`RG-DS-PLUS-EN16GB-V1.0`), plus a native **x86_64 Linux (X11)** target that renders both screens in a stacked clamshell window for desktop testing.
 
 ## What Was Adapted from the RG DS Plus Firmware Image
 By inspecting `RG-DS-PLUS-EN16GB-V1.0-20260915.IMG` (`Roms/APPS/Clock.sh`, `Roms/APPS/clock/`, `Roms/APPS/System_Settings.sh`, `Roms/APPS/mod_set/`, `/mnt/vendor/subscreen/subscreen.dge`, `/mnt/vendor/bin/dmenu.bin`, and `/mnt/vendor/bin/ebook/green`), the code and packaging were configured to match the exact RG DS Plus hardware and OS:
@@ -38,10 +38,9 @@ By inspecting `RG-DS-PLUS-EN16GB-V1.0-20260915.IMG` (`Roms/APPS/Clock.sh`, `Roms
 | **Increase / Decrease Tempo (±1 BPM, hold for continuous)** | **D-Pad UP** / **DOWN** | `Up Arrow` / `Down Arrow` |
 | **Cycle Time Signature (`4/4`, `3/4`, `2/4`, `5/4`, `7/4`)** | **D-Pad LEFT** / **RIGHT** | `Left Arrow` / `Right Arrow` |
 | **Fast Tempo Step (±5 BPM)** | **R1 / R2** (+5) and **L1 / L2** (-5) | `Page Up` / `Page Down` or `]` / `[` |
-| **Volume Up / Down (0–100%, hold for continuous)** | **VOL+** (`115`) / **VOL-** (`114`) | `+` / `=` (Vol Up) and `-` / `_` (Vol Down) |
-| **Screen Brightness Up / Down** | **START + VOL+** / **START + VOL-** | *(Hardware only)* |
-| **Reset Current Session Stats (while paused)** | **B** | `B` or `C` |
-| **Save & Quit** | **MENU (`M`)**, **SELECT**, or **START + SELECT** | `Q` or `ESC` |
+| **System & Click Volume Up / Down (0–100%, hold for continuous)** | **VOL+** (`115`) / **VOL-** (`114`) | `+` / `=` (Vol Up) and `-` / `_` (Vol Down) |
+| **Reset Current Session Stats (while paused)** | **B** | `B` |
+| **Save & Quit** | **SELECT**, **START**, or **MENU (`M`)** | `S`, `Tab`, `Backspace`, `Q`, or `ESC` |
 
 ---
 

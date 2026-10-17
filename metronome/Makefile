@@ -14,12 +14,16 @@ SYSROOT_FLAGS = --sysroot="$(AARCH64_ROOT)" \
 	-B"$(AARCH64_ROOT)/usr/lib/gcc-cross/aarch64-linux-gnu/14" \
 	-L"$(AARCH64_ROOT)/usr/aarch64-linux-gnu/lib"
 
-CFLAGS = -O2 -Wall -Wextra -std=gnu99 -mcpu=cortex-a55 -D_GNU_SOURCE=1 $(SYSROOT_FLAGS)
+SDK_DIR = ../sdk
+SDK_INC = $(SDK_DIR)/include
+SDK_SRCS = $(SDK_DIR)/src/rgds_sdk.c
+
+CFLAGS = -O2 -Wall -Wextra -std=gnu99 -mcpu=cortex-a55 -D_GNU_SOURCE=1 -I$(SDK_INC) $(SYSROOT_FLAGS)
 LDFLAGS = -lm -lpthread -ldl
 
 # --- Host Linux (x86_64 X11 Dual-Screen Window + PulseAudio dlopen) Configuration ---
 HOST_CC ?= gcc
-HOST_CFLAGS = -O2 -Wall -Wextra -std=gnu99 -DHOST_X11 -D_GNU_SOURCE=1
+HOST_CFLAGS = -O2 -Wall -Wextra -std=gnu99 -DHOST_X11 -D_GNU_SOURCE=1 -I$(SDK_INC)
 HOST_LDFLAGS = -lX11 -lm -lpthread -ldl
 
 # --- Targets ---
@@ -39,12 +43,12 @@ linux: $(HOST_TARGET)
 
 host: $(HOST_TARGET)
 
-$(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRCS) $(LDFLAGS)
+$(TARGET): $(SRCS) $(SDK_SRCS) $(SDK_INC)/rgds_sdk.h
+	$(CC) $(CFLAGS) -o $(TARGET) $(SRCS) $(SDK_SRCS) $(LDFLAGS)
 	$(STRIP) $(TARGET)
 
-$(HOST_TARGET): $(SRCS)
-	$(HOST_CC) $(HOST_CFLAGS) -o $(HOST_TARGET) $(SRCS) $(HOST_LDFLAGS)
+$(HOST_TARGET): $(SRCS) $(SDK_SRCS) $(SDK_INC)/rgds_sdk.h
+	$(HOST_CC) $(HOST_CFLAGS) -o $(HOST_TARGET) $(SRCS) $(SDK_SRCS) $(HOST_LDFLAGS)
 
 run-linux: $(HOST_TARGET)
 	./$(HOST_TARGET)
