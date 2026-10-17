@@ -188,11 +188,15 @@ The SDK includes two heavily commented starter applications in [`examples/`](exa
 - **Upper Screen (`RGDS_SCREEN_TOP`, `1024×768`)**: A large `"HELLO"` banner that you can move around with the **D-Pad** (press **X** to re-center), along with live uptime, **A**/**B** press counters, and real-time touchscreen coordinate telemetry.
 - **Lower Screen (`RGDS_SCREEN_BOTTOM`, `1024×768`)**: A large `"WORLD"` banner above a real-time **Interactive Button & 10-Point Touchscreen Tester** that highlights every RG DS Plus button as you press it and draws live multi-touch crosshairs (`T0..T9`) and a persistent touch drawing trail (press **Y** to clear trail).
 
+![Screenshot of hello](/sdk/promo/hello.png)
+
 ### 5.2 `hello_touch` ([`examples/hello_touch.c`](examples/hello_touch.c)) — Multi-Touch UI & Canvas Starter App
 Designed as a documented starting point for writing touch-driven utilities and games:
 - **Single-Touch UI Toolbar (`input.touch.just_pressed`)**: On-screen clickable color swatch buttons (`CYN`, `YEL`, `GRN`, `ORG`, `RED`, `WHT`), brush size toggle (`SZ:1` / `SZ:2` / `SZ:3`), and a `CLEAR` button on the Lower Touchscreen.
 - **10-Point Simultaneous Multi-Touch Canvas (`input.touch.points[0..9]`)**: Uses Bresenham stroke interpolation (`pt->dx`, `pt->dy`) so up to 10 fingers can draw smooth, continuous strokes simultaneously on the Lower Screen, with pressure-reactive finger reticles (`F0..F9`).
 - **2-Finger Pinch/Spread Chord Visualizer**: When 2 or more fingers touch the screen at the same time, draws a live connecting chord and midpoint marker between the first two active fingers on the Lower Screen and renders a real-time pixel distance gauge on the Upper Screen alongside a 10-slot coordinate inspector table.
+
+![Screenshot of hello_touch](/sdk/promo/hello_touch.png)
 
 ### Build Both Targets (`aarch64` Device + `x86_64` Host Simulator)
 ```bash
