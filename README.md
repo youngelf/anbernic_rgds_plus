@@ -32,6 +32,13 @@ A work timer to let folks know that you are working.
 
 ![Screenshot of pomodoro](/pomodoro/promo/pomodoro_grab.png)
 
+## [Night Clock](night_clock/)
+
+A dual-screen bedside and desk clock featuring an app-local timezone shift (`±30m` increments), 24-hour Retro LED Dot-Matrix digital and minimalist analog faces (`X` button) with 10-minute IPS anti-burn-in orbit, a bottom date screen that automatically powers off after 5 seconds and wakes on any button press, D-Pad brightness control, a single alarm in the shifted timezone with loud confirmation audio (`A` button), and a toggleable `R1` Help screen.
+
+![Screenshot of night_clock digital](/night_clock/promo/digital_clock.png)
+![Screenshot of night_clock analog](/night_clock/promo/analog_clock.png)
+
 ## [SDK](sdk/)
 
 An SDK which can be used to develop further applications, supporting both `1024x768` dual screens via Weston/SDL2, all physical controls (`ANBERNIC-rk3568-keys`), and the 10-point capacitive touchscreen (`goodix-ts` Goodix GT911 on the lower screen, automatically enabled via `/sys/class/anbernic_misc/tpctrl`), along with a dual-screen Linux X11 desktop simulator and two heavily documented starter examples:
