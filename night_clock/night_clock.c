@@ -79,6 +79,8 @@ typedef enum {
 static int       g_tz_shift_mins = 0;      /* -1440 .. +1440 in steps of 30 mins */
 static bool      g_is_analog     = false;  /* false = Retro LED Digital, true = Minimal Analog */
 static int       g_brightness    = 7;      /* 1 .. 10 */
+static volatile int g_volume     = 8;      /* 0 .. 10 */
+static bool      g_vol_from_cfg  = false;
 static bool      g_alarm_enabled = false;
 static int       g_alarm_hour    = 7;      /* 0 .. 23 (in shifted timezone) */
 static int       g_alarm_min     = 0;      /* 0 .. 59 (in shifted timezone) */
@@ -107,7 +109,7 @@ static bool      g_alarm_ringing         = false;
 static uint64_t  g_alarm_ring_start_ms   = 0;
 static int       g_last_alarm_min_key    = -1;
 static volatile int g_confirm_samples_rem = 0;
-static int       g_saved_vol_before_alrm = -1;
+static bool      g_vol_pending_confirm   = false;
 
 /* 10-minute anti-burn-in smooth orbit state */
 static uint64_t  g_boot_mono_ms          = 0;
@@ -241,6 +243,11 @@ static void load_config(void) {
                 g_is_analog = (val != 0);
             } else if (strcmp(key, "brightness") == 0) {
                 if (val >= 1 && val <= 10) g_brightness = val;
+            } else if (strcmp(key, "volume") == 0) {
+                if (val >= 0 && val <= 10) {
+                    g_volume = val;
+                    g_vol_from_cfg = true;
+                }
             } else if (strcmp(key, "alarm_enabled") == 0) {
                 g_alarm_enabled = (val != 0);
             } else if (strcmp(key, "alarm_hour") == 0) {
@@ -260,6 +267,7 @@ static void save_config(void) {
     fprintf(f, "tz_shift_mins=%d\n", g_tz_shift_mins);
     fprintf(f, "is_analog=%d\n",     g_is_analog ? 1 : 0);
     fprintf(f, "brightness=%d\n",    g_brightness);
+    fprintf(f, "volume=%d\n",        g_volume);
     fprintf(f, "alarm_enabled=%d\n", g_alarm_enabled ? 1 : 0);
     fprintf(f, "alarm_hour=%d\n",    g_alarm_hour);
     fprintf(f, "alarm_min=%d\n",     g_alarm_min);
@@ -302,6 +310,11 @@ static void (*pSDL_CloseAudio)(void) = NULL;
  *     and when the alarm time is reached (continuous repeating klaxon pattern).
  */
 static void render_alarm_samples(int16_t *out, int num_samples) {
+    int vol = g_volume;
+    if (vol < 0)  vol = 0;
+    if (vol > 10) vol = 10;
+    float vol_gain = (float)vol / 10.0f;
+
     for (int i = 0; i < num_samples; i++) {
         int rem_confirm = g_confirm_samples_rem;
         bool active_confirm = (rem_confirm > 0);
@@ -309,7 +322,7 @@ static void render_alarm_samples(int16_t *out, int num_samples) {
             g_confirm_samples_rem = rem_confirm - 1;
         }
 
-        if (!active_confirm && !g_alarm_ringing) {
+        if ((!active_confirm && !g_alarm_ringing) || vol == 0) {
             out[i] = 0;
             continue;
         }
@@ -346,7 +359,7 @@ static void render_alarm_samples(int16_t *out, int num_samples) {
         }
 
         float wave = (s1 + s2 + s3) * (1.0f / 1.85f) * env;
-        int32_t sample = (int32_t)(wave * 28000.0f);
+        int32_t sample = (int32_t)(wave * 28000.0f * vol_gain);
         if (sample >  32000) sample =  32000;
         if (sample < -32000) sample = -32000;
         out[i] = (int16_t)sample;
@@ -485,12 +498,8 @@ static void audio_shutdown(void) {
 }
 
 static void trigger_loud_confirmation_sound(void) {
-    /* Ensure system volume is loud enough to hear the confirmation clearly */
-    int cur_vol = rgds_get_volume();
-    if (cur_vol < 9) {
-        g_saved_vol_before_alrm = cur_vol;
-        rgds_set_volume(9);
-    }
+    /* Play the confirmation alarm at the current volume level (g_volume) */
+    rgds_set_volume(g_volume);
     g_tone_sample_idx = 0;
     /* Play 2 full 4-pulse groups (~1.6 seconds at 44100 Hz) */
     g_confirm_samples_rem = 35280 * 2;
@@ -871,7 +880,7 @@ static void format_tz_shift(char *buf, size_t sz, int shift_mins) {
     int abs_m = (shift_mins >= 0) ? shift_mins : -shift_mins;
     int hh = abs_m / 60;
     int mm = abs_m % 60;
-    snprintf(buf, sz, "DEV %c%02d:%02d", sign, hh, mm);
+    snprintf(buf, sz, "TZ %c%02d:%02d", sign, hh, mm);
 }
 
 static void render_top_digital_clock(const struct tm *shifted_tm, int cx, int cy, uint64_t now_ms) {
@@ -1124,7 +1133,7 @@ static void render_bottom_normal_date(const struct tm *shifted_tm, const struct 
              dev_tm->tm_hour % 24, dev_tm->tm_min % 60);
     rgds_draw_text_centered(RGDS_SCREEN_BOTTOM, card_y + 204, iso_line, 2, RGDS_RGB(145, 175, 215));
 
-    /* 2. Three Status Cards: Timezone Shift, Alarm Status, Brightness */
+    /* 2. Three Status Cards: Timezone Shift, Alarm Status, Volume */
     int sc_y = 372, sc_h = 190, sc_w = 300, sc_gap = 26;
     int sc1_x = 36;
     int sc2_x = sc1_x + sc_w + sc_gap;
@@ -1152,21 +1161,22 @@ static void render_bottom_normal_date(const struct tm *shifted_tm, const struct 
                    g_alarm_enabled ? RGDS_RGB(72, 219, 136) : RGDS_RGB(120, 135, 160));
     rgds_draw_text(RGDS_SCREEN_BOTTOM, sc2_x + 20, sc_y + 138, "PRESS [A] TO SET ALARM", 2, RGDS_RGB(145, 175, 215));
 
-    /* Card 3: Brightness */
+    /* Card 3: Volume Level Indicator */
     rgds_fill_rect(RGDS_SCREEN_BOTTOM, sc3_x, sc_y, sc_w, sc_h, RGDS_RGB(16, 23, 36));
     rgds_draw_rect(RGDS_SCREEN_BOTTOM, sc3_x, sc_y, sc_w, sc_h, 2, RGDS_RGB(58, 86, 132));
-    rgds_draw_text(RGDS_SCREEN_BOTTOM, sc3_x + 20, sc_y + 20, "BRIGHTNESS", 2, RGDS_RGB(140, 165, 205));
-    char br_str[32];
-    snprintf(br_str, sizeof(br_str), "%d / 10", g_brightness);
-    rgds_draw_text(RGDS_SCREEN_BOTTOM, sc3_x + 20, sc_y + 58, br_str, 4, RGDS_RGB(248, 212, 108));
+    rgds_draw_text(RGDS_SCREEN_BOTTOM, sc3_x + 20, sc_y + 20, "VOLUME", 2, RGDS_RGB(140, 165, 205));
+    char vol_str[32];
+    snprintf(vol_str, sizeof(vol_str), "%d / 10", g_volume);
+    rgds_draw_text(RGDS_SCREEN_BOTTOM, sc3_x + 20, sc_y + 58, vol_str, 4,
+                   (g_volume > 0) ? RGDS_RGB(248, 212, 108) : RGDS_RGB(120, 135, 160));
 
-    /* 10-segment brightness bar */
+    /* 10-segment volume bar */
     for (int i = 0; i < 10; i++) {
         int bx = sc3_x + 20 + i * 26;
-        uint32_t bc = (i < g_brightness) ? RGDS_RGB(248, 212, 108) : RGDS_RGB(34, 46, 68);
+        uint32_t bc = (i < g_volume) ? RGDS_RGB(248, 212, 108) : RGDS_RGB(34, 46, 68);
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, bx, sc_y + 112, 20, 18, bc);
     }
-    rgds_draw_text(RGDS_SCREEN_BOTTOM, sc3_x + 20, sc_y + 144, "D-PAD UP / DOWN", 2, RGDS_RGB(120, 145, 180));
+    rgds_draw_text(RGDS_SCREEN_BOTTOM, sc3_x + 20, sc_y + 144, "VOL+ / VOL- BUTTONS", 2, RGDS_RGB(120, 145, 180));
 
     /* 3. Bottom Critical Button Mappings Bar (2x2 Grid of Prominent Pills) */
     int btn_y1 = 588, btn_y2 = 664;
@@ -1290,7 +1300,7 @@ static void render_bottom_help(void) {
         { "B BUTTON",           "Disable / cancel in Alarm Set Mode (or wake screen)" },
         { "R1 (RIGHT SHOULDER)","Toggle this Help screen ON / OFF" },
         { "L1 / R2 (IN ALARM)", "Step alarm minutes by -5 / +5 mins while setting" },
-        { "VOL+ / VOL-",        "Adjust system speaker volume" },
+        { "VOL+ / VOL-",        "Adjust volume (0..10) & play confirmation alarm at end" },
         { "ANY BUTTON PRESS",   "Performs action immediately & wakes bottom screen (5s)" },
         { "START / SELECT",     "Save configuration & exit Night Clock" }
     };
@@ -1377,8 +1387,14 @@ static bool check_button_with_repeat(const rgds_input_state_t *in, repeat_tracke
  * ============================================================================ */
 
 int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+    int dump_promo_mode = 0;
+    const char *dump_prefix = NULL;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--dump-promo") == 0 && i + 1 < argc) {
+            dump_promo_mode = 1;
+            dump_prefix = argv[++i];
+        }
+    }
 
     signal(SIGINT,  handle_sig);
     signal(SIGTERM, handle_sig);
@@ -1396,6 +1412,12 @@ int main(int argc, char **argv) {
 
     /* Render directly into the dual 1024x768 native framebuffers */
     rgds_set_direct_native_mode(true);
+
+    if (g_vol_from_cfg) {
+        rgds_set_volume(g_volume);
+    } else {
+        g_volume = rgds_get_volume();
+    }
 
     apply_hardware_brightness(g_brightness);
     audio_init();
@@ -1419,12 +1441,6 @@ int main(int argc, char **argv) {
 
         uint64_t now_ms = rgds_ticks_ms();
 
-        /* Restore volume after confirmation tone completes */
-        if (g_confirm_samples_rem <= 0 && !g_alarm_ringing && g_saved_vol_before_alrm >= 0) {
-            rgds_set_volume(g_saved_vol_before_alrm);
-            g_saved_vol_before_alrm = -1;
-        }
-
         /* Any button press or touch wakes the bottom screen for 5 seconds */
         bool any_input = (input.pressed != 0) || (input.held != 0) ||
                          input.touch.just_pressed || input.touch.touching;
@@ -1436,10 +1452,8 @@ int main(int argc, char **argv) {
         if (g_alarm_ringing) {
             if (input.pressed != 0 || input.touch.just_pressed) {
                 g_alarm_ringing = false;
-                if (g_saved_vol_before_alrm >= 0) {
-                    rgds_set_volume(g_saved_vol_before_alrm);
-                    g_saved_vol_before_alrm = -1;
-                }
+                g_vol_pending_confirm = false;
+                g_confirm_samples_rem = 0;
                 show_toast("ALARM DISMISSED", now_ms);
                 /* Consume this press so dismissing the alarm doesn't trigger another action */
                 input.pressed = 0;
@@ -1447,6 +1461,26 @@ int main(int argc, char **argv) {
                 /* Auto-silence after 5 minutes */
                 g_alarm_ringing = false;
             }
+        }
+
+        /* Volume +/- handling: update indicator immediately, and play alarm confirmation at the end */
+        int sdk_vol = rgds_get_volume();
+        bool vol_btn_pressed = (input.pressed & (RGDS_BTN_VOL_UP | RGDS_BTN_VOL_DOWN)) != 0;
+        bool vol_btn_held    = (input.held    & (RGDS_BTN_VOL_UP | RGDS_BTN_VOL_DOWN)) != 0;
+        if (sdk_vol != g_volume || vol_btn_pressed) {
+            g_volume = sdk_vol;
+            save_config();
+            char vmsg[64];
+            snprintf(vmsg, sizeof(vmsg), "VOLUME: %d / 10", g_volume);
+            show_toast(vmsg, now_ms);
+            g_vol_pending_confirm = true;
+            if (vol_btn_held) {
+                g_confirm_samples_rem = 0;
+            }
+        }
+        if (g_vol_pending_confirm && !vol_btn_held) {
+            g_vol_pending_confirm = false;
+            trigger_loud_confirmation_sound();
         }
 
         /* Right Shoulder (R1) toggles the Help screen from any mode.
@@ -1606,11 +1640,7 @@ int main(int argc, char **argv) {
             g_last_alarm_min_key = cur_min_key;
             g_alarm_ringing      = true;
             g_alarm_ring_start_ms = now_ms;
-            int cur_vol = rgds_get_volume();
-            if (cur_vol < 10) {
-                g_saved_vol_before_alrm = cur_vol;
-                rgds_set_volume(10);
-            }
+            rgds_set_volume(g_volume);
             wake_bottom_screen(now_ms);
         }
 
@@ -1626,14 +1656,60 @@ int main(int argc, char **argv) {
         render_bottom_screen(&shifted_tm, &dev_tm, now_ms);
         rgds_present();
 
+        /* Optional promo screenshot dump mode */
+        if (dump_promo_mode && dump_prefix) {
+            struct {
+                bool is_analog;
+                ui_mode_t mode;
+                bool bot_awake;
+                int tz_mins;
+                bool alrm_en;
+                const char *suffix;
+            } shots[4] = {
+                { false, UI_MODE_NORMAL,    true,  330, true,  "digital_clock.raw" },
+                { true,  UI_MODE_NORMAL,    false, 330, true,  "analog_clock.raw"  },
+                { false, UI_MODE_ALARM_SET, true,  330, true,  "alarm_set.raw"     },
+                { false, UI_MODE_HELP,      true,  330, true,  "help_screen.raw"   },
+            };
+            g_volume = 8;
+            g_alarm_hour = 7;
+            g_alarm_min  = 30;
+            g_edit_alarm_hour = 7;
+            g_edit_alarm_min  = 30;
+            g_edit_alarm_enabled = true;
+            for (int s = 0; s < 4; s++) {
+                g_is_analog      = shots[s].is_analog;
+                g_ui_mode        = shots[s].mode;
+                g_bottom_awake   = shots[s].bot_awake;
+                g_tz_shift_mins  = shots[s].tz_mins;
+                g_alarm_enabled  = shots[s].alrm_en;
+                g_bottom_wake_until_ms = now_ms + 4200ULL;
+
+                struct tm s_tm = dev_tm;
+                s_tm.tm_min += g_tz_shift_mins;
+                s_tm.tm_isdst = -1;
+                mktime(&s_tm);
+
+                render_top_screen(&s_tm, now_ms);
+                render_bottom_screen(&s_tm, &dev_tm, now_ms);
+
+                char out_fn[256];
+                snprintf(out_fn, sizeof(out_fn), "%s_%s", dump_prefix, shots[s].suffix);
+                FILE *df = fopen(out_fn, "wb");
+                if (df) {
+                    fwrite(rgds_get_native_buffer(RGDS_SCREEN_TOP), sizeof(uint32_t), (size_t)NATIVE_W * NATIVE_H, df);
+                    fwrite(rgds_get_native_buffer(RGDS_SCREEN_BOTTOM), sizeof(uint32_t), (size_t)NATIVE_W * NATIVE_H, df);
+                    fclose(df);
+                }
+            }
+            break;
+        }
+
         rgds_delay_ms(16);
     }
 
-    /* Restore bottom screen power & volume before exiting */
+    /* Restore bottom screen power before exiting */
     set_bottom_screen_hw_power(true);
-    if (g_saved_vol_before_alrm >= 0) {
-        rgds_set_volume(g_saved_vol_before_alrm);
-    }
     save_config();
     audio_shutdown();
     rgds_shutdown();
