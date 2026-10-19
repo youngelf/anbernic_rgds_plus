@@ -39,6 +39,14 @@ A dual-screen bedside and desk clock featuring an app-local timezone shift (`±3
 ![Screenshot of night_clock digital](/night_clock/promo/digital_clock.png)
 ![Screenshot of night_clock analog](/night_clock/promo/analog_clock.png)
 
+## [Boot Logo Customizer](boot_logo/)
+
+An on-device dual-screen boot logo customizer that updates both Stage 1 (U-Boot + Linux Kernel DRM FIT/Rockchip `RSCE` resource container in `/dev/mmcblk1p3` with automatic SHA-256 digest recalculation and read-back verification) and Stage 2 (`/mnt/vendor/resource/res{1,2}/boot/logo{,2}.png` cold-boot splash), with automatic backup and one-button factory restore. Includes four dual-screen themes sliced from `1024x1686` continuous compositions with a `150px` hinge gap buffer (`Cooking Pixels A`, `Cooking Pixels B`, `Tux Starry Sky`, and `Midnight Poetry`) plus Factory Stock restore.
+
+![Screenshot of boot_logo Cooking Pixels](/boot_logo/promo/theme_chef_stew.png)
+![Screenshot of boot_logo Tux Sky](/boot_logo/promo/theme_tux_sky.png)
+![Screenshot of boot_logo Midnight Poetry](/boot_logo/promo/theme_poetry.png)
+
 ## [SDK](sdk/)
 
 An SDK which can be used to develop further applications, supporting both `1024x768` dual screens via Weston/SDL2, all physical controls (`ANBERNIC-rk3568-keys`), and the 10-point capacitive touchscreen (`goodix-ts` Goodix GT911 on the lower screen, automatically enabled via `/sys/class/anbernic_misc/tpctrl`), along with a dual-screen Linux X11 desktop simulator and two heavily documented starter examples:
