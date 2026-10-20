@@ -51,9 +51,10 @@ Reverse engineering the factory firmware image (`RG-DS-PLUS-EN16GB-V1.0-20260915
    * Its final sub-image is `/images/resource` (`data-position = 0x25d1200`), which holds a **Rockchip Resource Container (`RSCE`)** containing 11 `ENTR` entries (512-byte block aligned): `rk-kernel.dtb`, `battery_0.bmp`..`battery_5.bmp`, `battery_fail.bmp`, `battery_null.bmp`, **`logo.bmp`** (displayed on the **Top Screen**, `route-dsi1`), and **`logo_kernel.bmp`** (displayed on the **Bottom Screen**, `route-dsi0`).
    * U-Boot's Rockchip DRM driver requires uncompressed BMPs (`biCompression = 0`, 24-bit BGR) with a **negative `biHeight` (`-768`)** indicating a **top-down scanline order** (`1024x768`).
    * Because `/images/resource` is located at the very end of the FIT payload (`0x25d1200`), `boot_logo` repacks the 11-entry `RSCE` container in memory with the selected `1024x768` 24-bpp top-down BMPs (`2,359,350` bytes each, well inside U-Boot's `8 MB` `MAX_IMAGE_BYTES` limit and `64 MB` partition size), computes the new **SHA-256** digest of the `RSCE` blob, updates `/images/resource/data-size`, `/images/resource/hash/value`, and the FDT `totalsize` header, writes the updated container and FIT header to `/dev/mmcblk1p3`, and performs a full read-back SHA-256 verification.
-2. **Stage 2 — Userspace Launcher Cold-Boot Splash (`vendor` partition, `/dev/mmcblk1p8` mounted at `/mnt/vendor`)**:
+2. **Stage 2 — Userspace Launcher Cold-Boot & Shutdown/Exit Splash (`vendor` partition, `/dev/mmcblk1p8` mounted at `/mnt/vendor`)**:
    * When `/mnt/vendor/bin/dmenu.bin` (or `muos2.bin`) starts on cold boot (before `/tmp/boot.ini` is created), it loads `/mnt/vendor/resource/res1/boot/logo.png` (Top Screen) and `/mnt/vendor/resource/res1/boot/logo2.png` (Bottom Screen) — or `res2/boot/` depending on the UI theme — via `IMG_Load()` and renders them at `1024x768` for 1 second while initializing audio and storage.
-   * `boot_logo` updates both `res1/boot/` and `res2/boot/` PNG pairs so the transition from Stage 1 (U-Boot/Kernel) to Stage 2 (Userspace) is completely seamless.
+   * When shutting down or rebooting the device, `dmenu.bin` / `muos2.bin` loads `/mnt/vendor/resource/res{1,2}/shutdown/goodbye.png` (`1024x768`) and displays it on the **Bottom Screen** for 1.4 seconds before poweroff.
+   * `boot_logo` updates both `res1/boot/logo{,2}.png`, `res2/boot/logo{,2}.png`, and `res{1,2}/shutdown/goodbye.png` (using the selected bottom-screen theme image, or restoring the original factory `goodbye.png` when **Stock OEM** or **Restore Stock** is chosen).
 
 ---
 

@@ -599,8 +599,10 @@ static void ensure_desktop_sim_env(void) {
     mkdir("/tmp/rgds_boot_logo_sim/vendor/resource", 0755);
     mkdir("/tmp/rgds_boot_logo_sim/vendor/resource/res1", 0755);
     mkdir("/tmp/rgds_boot_logo_sim/vendor/resource/res1/boot", 0755);
+    mkdir("/tmp/rgds_boot_logo_sim/vendor/resource/res1/shutdown", 0755);
     mkdir("/tmp/rgds_boot_logo_sim/vendor/resource/res2", 0755);
     mkdir("/tmp/rgds_boot_logo_sim/vendor/resource/res2/boot", 0755);
+    mkdir("/tmp/rgds_boot_logo_sim/vendor/resource/res2/shutdown", 0755);
 
     const char *sim_boot = "/tmp/rgds_boot_logo_sim/sim_boot.img";
     if (access(sim_boot, R_OK | W_OK) == 0) {
@@ -783,17 +785,29 @@ static bool flash_boot_logos(
 
     const char *vendor_root = get_vendor_root_path();
     const char *res_dirs[2] = {"res1", "res2"};
+    const char *goodbye_src = bot_t->bot_png_path;
+    if (bot_t->is_factory_stock) {
+        goodbye_src = (access("backup/orig_vendor_goodbye.png", R_OK) == 0)
+                      ? "backup/orig_vendor_goodbye.png"
+                      : "logos/factory_goodbye.png";
+    }
+
     int vendor_updated = 0;
     for (int i = 0; i < 2; i++) {
-        char p1[256], p2[256];
+        char p1[256], p2[256], p_exit[256];
         snprintf(p1, sizeof(p1), "%s/resource/%s/boot/logo.png", vendor_root, res_dirs[i]);
         snprintf(p2, sizeof(p2), "%s/resource/%s/boot/logo2.png", vendor_root, res_dirs[i]);
+        snprintf(p_exit, sizeof(p_exit), "%s/resource/%s/shutdown/goodbye.png", vendor_root, res_dirs[i]);
         if (i == 0 && access("backup/orig_vendor_logo.png", F_OK) != 0) {
             copy_file_binary(p1, "backup/orig_vendor_logo.png");
             copy_file_binary(p2, "backup/orig_vendor_logo2.png");
         }
+        if (i == 0 && access("backup/orig_vendor_goodbye.png", F_OK) != 0) {
+            copy_file_binary(p_exit, "backup/orig_vendor_goodbye.png");
+        }
         if (copy_file_binary(top_t->top_png_path, p1) &&
-            copy_file_binary(bot_t->bot_png_path, p2)) {
+            copy_file_binary(bot_t->bot_png_path, p2) &&
+            copy_file_binary(goodbye_src, p_exit)) {
             vendor_updated++;
         }
     }
@@ -801,7 +815,7 @@ static bool flash_boot_logos(
 
     snprintf(status_msg, status_msg_sz, "FLASHED & VERIFIED OK!");
     snprintf(detail_msg, detail_msg_sz,
-             "RSCE %u KB | SHA256 %02x%02x%02x%02x.. | Vendor res1/res2 (%d/2) updated",
+             "RSCE %u KB | SHA256 %02x%02x%02x%02x.. | Boot+Exit res1/2 (%d/2) OK",
              (unsigned)(new_rsce_len / 1024U),
              sha256_digest[0], sha256_digest[1], sha256_digest[2], sha256_digest[3],
              vendor_updated);
@@ -965,10 +979,11 @@ static void render_ui_frame(
         rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 198, "Top: logo.bmp", 1, RGDS_RGB(130, 235, 170));
         rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 216, "Bot: logo_kernel.bmp", 1, RGDS_RGB(130, 235, 170));
 
-        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 252, "STAGE 2 VENDOR:", 2, RGDS_RGB(255, 210, 80));
-        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 278, "dmenu / muos2 Splash", 1, RGDS_RGB(220, 220, 240));
-        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 296, "/mnt/vendor/resource", 1, RGDS_RGB(170, 175, 205));
-        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 314, "res1 & res2 PNGs", 1, RGDS_RGB(130, 235, 170));
+        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 248, "STAGE 2 & EXIT:", 2, RGDS_RGB(255, 210, 80));
+        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 272, "/mnt/vendor/resource", 1, RGDS_RGB(220, 220, 240));
+        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 290, "boot/logo & logo2.png", 1, RGDS_RGB(130, 235, 170));
+        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 308, "shutdown/goodbye.png", 1, RGDS_RGB(130, 235, 170));
+        rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 326, "(res1 & res2 themes)", 1, RGDS_RGB(170, 175, 205));
 
         rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 352, "VERIFICATION:", 2, RGDS_RGB(255, 140, 180));
         rgds_draw_text(RGDS_SCREEN_BOTTOM, 804, 378, "FIT SHA256 Digest", 1, RGDS_RGB(220, 220, 240));
@@ -1030,19 +1045,19 @@ static void render_ui_frame(
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 115, line1, 3, RGDS_RGB(255, 235, 120));
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 165, line2, 3, RGDS_RGB(120, 230, 255));
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 230,
-                               "Updates Stage 1 (boot FIT/RSCE) + Stage 2 (/mnt/vendor)",
+                               "Updates Boot (FIT/RSCE + vendor) & Exit (goodbye.png)",
                                2, RGDS_RGB(200, 200, 220));
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 305,
                                "Press [A] to Confirm & Flash   |   Press [B] to Cancel",
                                2, RGDS_RGB(255, 255, 255));
         } else if (modal == MODAL_CONFIRM_STOCK) {
             rgds_draw_rect(RGDS_SCREEN_BOTTOM, mx, my, mw, mh, 4, RGDS_RGB(255, 150, 120));
-            draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 44, "RESTORE FACTORY BOOT LOGO?", 3, RGDS_RGB(255, 180, 120));
+            draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 44, "RESTORE FACTORY BOOT & EXIT?", 3, RGDS_RGB(255, 180, 120));
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 130,
                                "Restores the original Anbernic factory logo.bmp,",
                                2, RGDS_RGB(235, 235, 245));
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 165,
-                               "logo_kernel.bmp, and /mnt/vendor/resource boot PNGs.",
+                               "logo_kernel.bmp, boot/logo{,2}.png & shutdown/goodbye.png.",
                                2, RGDS_RGB(235, 235, 245));
             draw_centered_text(RGDS_SCREEN_BOTTOM, 512, my + 300,
                                "Press [A] to Restore Stock   |   Press [B] to Cancel",
