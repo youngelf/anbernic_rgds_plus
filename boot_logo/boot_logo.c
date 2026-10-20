@@ -209,8 +209,8 @@ typedef struct {
 
 static logo_theme_t g_themes[NUM_THEMES] = {
     {
-        .title = "COOKING PIXELS A",
-        .subtitle = "Chef Wario & Sous-Chef Tux (DS Toss) + Garlic Furnace",
+        .title = "STARCROSSED KISS",
+        .subtitle = "Girl blowing a glowing heart kiss across the screens",
         .top_bmp_path = "logos/theme1_top.bmp",
         .bot_bmp_path = "logos/theme1_bottom.bmp",
         .top_png_path = "logos/theme1_top.png",
@@ -218,7 +218,7 @@ static logo_theme_t g_themes[NUM_THEMES] = {
         .is_factory_stock = false,
     },
     {
-        .title = "COOKING PIXELS B",
+        .title = "COOKING PIXELS",
         .subtitle = "Chef Wario & Sous-Chef Tux (Spoon & Sack) + Garlic Furnace",
         .top_bmp_path = "logos/theme2_top.bmp",
         .bot_bmp_path = "logos/theme2_bottom.bmp",
@@ -909,10 +909,13 @@ static void render_ui_frame(
     } else {
         rgds_clear(RGDS_SCREEN_BOTTOM, RGDS_RGB(16, 14, 30));
 
-        /* Header bar */
+        /* Header bar with Quit Help */
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, 0, 0, RGDS_NATIVE_W, 60, RGDS_RGB(28, 22, 52));
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, 0, 60, RGDS_NATIVE_W, 3, RGDS_RGB(100, 210, 255));
-        draw_centered_text(RGDS_SCREEN_BOTTOM, 512, 19, "RG DS PLUS BOOT LOGO CUSTOMIZER", 3, RGDS_RGB(255, 225, 80));
+        rgds_draw_text(RGDS_SCREEN_BOTTOM, 28, 19, "RG DS PLUS BOOT LOGO CUSTOMIZER", 3, RGDS_RGB(255, 225, 80));
+        rgds_fill_rect(RGDS_SCREEN_BOTTOM, 696, 12, 304, 36, RGDS_RGB(56, 32, 68));
+        rgds_draw_rect(RGDS_SCREEN_BOTTOM, 696, 12, 304, 36, 2, RGDS_RGB(255, 150, 175));
+        draw_centered_text(RGDS_SCREEN_BOTTOM, 848, 23, "[START / SELECT] QUIT", 2, RGDS_RGB(255, 225, 235));
 
         /* Large 512x384 Bottom Screen Preview in the center with neon frame */
         int pv_w = 512, pv_h = 384;
@@ -937,8 +940,8 @@ static void render_ui_frame(
 
             char num_lbl[32];
             snprintf(num_lbl, sizeof(num_lbl), "#%d %s", i + 1,
-                     (i == 0) ? "CHEF STEW A" :
-                     (i == 1) ? "CHEF STEW B" :
+                     (i == 0) ? "KISS" :
+                     (i == 1) ? "CHEF STEW" :
                      (i == 2) ? "TUX SKY" :
                      (i == 3) ? "POETRY" : "STOCK OEM");
             rgds_draw_text(RGDS_SCREEN_BOTTOM, 44, cy + 12, num_lbl, 2, RGDS_RGB(245, 245, 255));
@@ -985,7 +988,7 @@ static void render_ui_frame(
         /* Interactive Button Row 1 (y = 590..662) */
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, 28, 590, 196, 72, RGDS_RGB(42, 36, 78));
         rgds_draw_rect(RGDS_SCREEN_BOTTOM, 28, 590, 196, 72, 3, RGDS_RGB(130, 120, 195));
-        draw_centered_text(RGDS_SCREEN_BOTTOM, 126, 616, "< PREV", 3, RGDS_RGB(255, 255, 255));
+        draw_centered_text(RGDS_SCREEN_BOTTOM, 126, 616, "[UP] PREV", 3, RGDS_RGB(255, 255, 255));
 
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, 244, 590, 536, 72, RGDS_RGB(32, 115, 68));
         rgds_draw_rect(RGDS_SCREEN_BOTTOM, 244, 590, 536, 72, 3, RGDS_RGB(110, 255, 160));
@@ -993,7 +996,7 @@ static void render_ui_frame(
 
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, 800, 590, 196, 72, RGDS_RGB(42, 36, 78));
         rgds_draw_rect(RGDS_SCREEN_BOTTOM, 800, 590, 196, 72, 3, RGDS_RGB(130, 120, 195));
-        draw_centered_text(RGDS_SCREEN_BOTTOM, 898, 616, "NEXT >", 3, RGDS_RGB(255, 255, 255));
+        draw_centered_text(RGDS_SCREEN_BOTTOM, 898, 616, "[DN] NEXT", 3, RGDS_RGB(255, 255, 255));
 
         /* Interactive Button Row 2 (y = 678..744) */
         rgds_fill_rect(RGDS_SCREEN_BOTTOM, 28, 678, 308, 66, RGDS_RGB(36, 52, 88));
@@ -1092,7 +1095,7 @@ int main(int argc, char **argv) {
     ui_modal_t modal = MODAL_NONE;
     bool last_flash_ok = true;
     char status_headline[96] = "READY TO CUSTOMIZE BOOT LOGO";
-    char status_detail[128]  = "Select a theme with D-Pad Left/Right, then press A to flash.";
+    char status_detail[128]  = "Select a theme with D-Pad Up/Down, then press A to flash.";
 
     rgds_input_state_t input;
     while (rgds_poll_input(&input)) {
@@ -1127,11 +1130,11 @@ int main(int argc, char **argv) {
                 modal = MODAL_NONE;
             }
         } else {
-            if (input.pressed & RGDS_BTN_LEFT) {
+            if (input.pressed & RGDS_BTN_UP) {
                 top_idx = (top_idx + NUM_THEMES - 1) % NUM_THEMES;
                 bot_idx = top_idx;
             }
-            if (input.pressed & RGDS_BTN_RIGHT) {
+            if (input.pressed & RGDS_BTN_DOWN) {
                 top_idx = (top_idx + 1) % NUM_THEMES;
                 bot_idx = top_idx;
             }
@@ -1146,7 +1149,7 @@ int main(int argc, char **argv) {
                 top_idx = bot_idx;
                 bot_idx = tmp;
             }
-            if (input.pressed & (RGDS_BTN_Y | RGDS_BTN_UP | RGDS_BTN_DOWN)) {
+            if (input.pressed & RGDS_BTN_Y) {
                 full_preview_mode = !full_preview_mode;
             }
             if (input.pressed & RGDS_BTN_A) {

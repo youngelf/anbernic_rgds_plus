@@ -8,14 +8,14 @@ It updates **both stages** of the RG DS Plus boot splash directly from the handh
 
 ## Bundled Themes & Screenshots
 
-### 1. Chef Wario & Sous-Chef Tux: Cooking Pixels A (`#1 CHEF STEW A`)
-Sliced from a `1024 x 1686` two-story vertical illustration (`768px` top screen + `150px` middle hinge buffer + `768px` bottom screen):
-* **Top Screen (`y = 0..768`)**: Master Chef Wario tossing a DS handheld and garlic into a bubbling cauldron of `BOOTLOADER STEW` (`COOKING UP PIXELS!`) alongside Sous-Chef Tux.
-* **Bottom Screen (`y = 918..1686`)**: The subterranean brick furnace room beneath the kitchen floor (`100% ORGANIC GARLIC FIRMWARE`), where a hamster in glasses runs on a wheel driving glowing green Linux Tux gears between crates of garlic bulbs and glowing microchips.
+### 1. Starcrossed Kiss (`#1 KISS`)
+Sliced from a `1024 x 1686` minimalist dual-screen illustration (`768px` top screen + `150px` middle hinge buffer + `768px` bottom screen) on a pure `#000000` black background:
+* **Top Screen (`y = 0..768`)**: Minimal cream/ivory line art of a boy in the top-right looking down longingly with his hand over his heart as a faint golden dust trail reaches him.
+* **Bottom Screen (`y = 918..1686`)**: Minimal line art of a girl in the bottom-left blowing a glowing coral-pink heart kiss upward across the screens.
 
-![Cooking Pixels A Theme](promo/theme_chef_stew.png)
+![Starcrossed Kiss Theme](promo/theme_chef_stew.png)
 
-### 2. Chef Wario & Sous-Chef Tux: Cooking Pixels B (`#2 CHEF STEW B`)
+### 2. Chef Wario & Sous-Chef Tux: Cooking Pixels (`#2 CHEF STEW`)
 * **Top Screen (`y = 0..768`)**: Sous-Chef Tux stirring green bubbling `BOOTLOADER STEW` with a giant wooden spoon while Chef Wario dumps a burlap sack of garlic, chips, and handhelds.
 * **Bottom Screen (`1:1` Full Dual-Screen Preview shown below, `y = 918..1686`)**: The subterranean brick furnace room beneath the 150px hinge gap.
 
@@ -61,14 +61,15 @@ Reverse engineering the factory firmware image (`RG-DS-PLUS-EN16GB-V1.0-20260915
 
 | Handheld Control | Linux Desktop Simulator (`boot_logo_linux`) | Action |
 | :--- | :--- | :--- |
-| **D-Pad Left / Right** | `Left` / `Right` Arrow | Cycle both Top & Bottom screens through the 4 themes |
+| **D-Pad Up / Down** | `Up` / `Down` Arrow | Cycle both Top & Bottom screens through the themes |
+| **D-Pad Left / Right** | `Left` / `Right` Arrow | Unassigned |
 | **`L1` / `R1` Shoulder** | `Q` / `E` | Independently cycle Top (`L1`) or Bottom (`R1`) screen to mix & match themes |
 | **`X` Button** | `W` | Swap Top and Bottom screen logos |
-| **`Y` Button / D-Pad Up/Down** | `A` / `Up` / `Down` | Toggle `1:1` Full Dual-Screen Preview (hides HUD overlays) |
+| **`Y` Button** | `A` | Toggle `1:1` Full Dual-Screen Preview (hides HUD overlays) |
 | **`A` Button** | `D` / `Enter` | Open Flash Confirmation dialog / Confirm flash |
 | **`B` Button** | `S` / `BackSpace` | Open Restore Factory Stock dialog / Cancel modal |
-| **Bottom Touchscreen** | Left Mouse Click | Tap preset cards (`#1`..`#4`) or action buttons directly |
-| **`START` / `SELECT` / `MENU`** | `Enter` / `Right Shift` / `Esc` | Exit application |
+| **Bottom Touchscreen** | Left Mouse Click | Tap preset cards (`#1`..`#4`), action buttons, or `[START / SELECT] QUIT` |
+| **`START` / `SELECT` / `MENU`** | `Enter` / `Right Shift` / `Esc` | Exit application (displayed on-screen in top-right header) |
 
 ---
 
